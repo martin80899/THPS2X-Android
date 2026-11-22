@@ -85,6 +85,39 @@ index 0034a6c..4d1a91e 100644
  static double s_video_aspect = 0.0;
  static int s_video_aspect_21;                     /* 21:9 chosen: the ratio may follow the display */
  void xbox_video_aspect_fit(double display_ratio);
+diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
+index 43b0aaf..0ef21d8 100644
+--- a/src/kernel/nv2a_pb_exec.c
++++ b/src/kernel/nv2a_pb_exec.c
+@@ -4299,7 +4299,13 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+         s_vtx_epoch++;
+     if (method == 0x1D70 && s_sem_va) {
+         uint8_t *mem = (uint8_t *)xbox_GetMemoryOffset();
++#if defined(__aarch64__)
++        /* a release store: every read of this batch's vertices and textures is done before the title can see
++         * the semaphore and reuse those buffers (an arm64 host may otherwise let the store overtake them) */
++        __atomic_store_n((uint32_t *)(mem + s_sem_va), param, __ATOMIC_RELEASE);
++#else
+         *(volatile uint32_t *)(mem + s_sem_va) = param;
++#endif
+         return;
+     }
+     /* The pattern object's SET_MONOCHROME_COLOR0 (0x0310) latches into
+diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
+index e3521b4..943dfcf 100644
+--- a/src/kernel/xbox_memory_layout.c
++++ b/src/kernel/xbox_memory_layout.c
+@@ -1873,6 +1873,10 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+             static uint32_t last_put;
+             DWORD now_ms = GetTickCount();
+             uint32_t put = *(volatile uint32_t *)((char *)regs + NV2A_USER_DMA_PUT);
++#if defined(__aarch64__)
++            /* the commands up to PUT are read after PUT itself (the guest's sfence orders its side) */
++            __atomic_thread_fence(__ATOMIC_ACQUIRE);
++#endif
+             if (put != last_put || (now_ms - last_put_ms) > 2000) {
+                 /* Survey the segment the title just submitted, once. */
+                 {
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
 index 9c57fc8..13a2210 100644
 --- a/src/nv2a_vk/nv2a_vk.c
@@ -452,3 +485,42 @@ index c1d5b44..05a76eb 100644
      if (!o || o->kind != K_FILEMAP) { SetLastError(ERROR_INVALID_HANDLE); return NULL; }
  
      off_t  off = ((off_t)offHigh << 32) | offLow;
+diff --git a/templates/runtime/recomp_types.h b/templates/runtime/recomp_types.h
+index f4db41b..993fc13 100644
+--- a/templates/runtime/recomp_types.h
++++ b/templates/runtime/recomp_types.h
+@@ -232,6 +232,15 @@ extern RECOMP_TLS uint32_t g_seh_ebp;
+  * now run on real host threads, so a read-modify-write that races is exactly
+  * the bug these instructions exist to prevent.
+  */
++/* RECOMP_FENCE: x86 sfence / lfence / mfence. An x86 host keeps stores in order anyway (the guest's
++ * fence was for write-combined memory); a weakly ordered host (arm64: Android, Apple silicon) does not,
++ * and a title that fills a pushbuffer then advances DMA_PUT behind an sfence needs that order kept. */
++#if defined(__aarch64__) || defined(__arm__) || defined(__riscv)
++#define RECOMP_FENCE() __atomic_thread_fence(__ATOMIC_SEQ_CST)
++#else
++#define RECOMP_FENCE() ((void)0)
++#endif
++
+ #if defined(_MSC_VER)
+ #include <intrin.h>
+ #define RECOMP_ATOMIC_ADD32(p, v)     ((uint32_t)_InterlockedExchangeAdd((volatile long *)(p), (long)(v)))
+diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
+index 8d818d9..9c12c17 100644
+--- a/tools/recomp/lifter.py
++++ b/tools/recomp/lifter.py
+@@ -1674,8 +1674,12 @@ class Lifter:
+         # Cache hints and store fences: nothing to model on a single-threaded
+         # interpreter over coherent host memory. Named so they stop showing up
+         # in the unimplemented report as if they were missing work.
+-        if m.startswith("prefetch") or m in ("sfence", "lfence", "mfence"):
+-            return [f"(void)0; /* {m}: cache/ordering hint, nothing to model */"]
++        if m.startswith("prefetch"):
++            return [f"(void)0; /* {m}: cache hint, nothing to model */"]
++        # Fences keep their order on a weakly ordered host (arm64): RECOMP_FENCE is a
++        # full barrier there and nothing on x86 (recomp_types.h).
++        if m in ("sfence", "lfence", "mfence"):
++            return [f"RECOMP_FENCE(); /* {m} */"]
+ 
+         if m in ("stc", "clc", "cmc"):
+             if not self.needs_cf:

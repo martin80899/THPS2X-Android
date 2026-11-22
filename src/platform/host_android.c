@@ -414,6 +414,25 @@ int host_init(int argc, char **argv, HostOptions *opt)
         fprintf(stderr, "[HOST] cannot enter %s: %s\n", opt->data_dir, strerror(errno));
     printf("[HOST] Android, folder %s\n", root);
 
+    /* data/env.txt: NAME=VALUE lines (# comments) set before the defaults below -- test switches for a
+     * player without a computer (RECOMP_GUEST_LOCK=0, RECOMP_VK_FXAA=0, ...). */
+    {
+        char p[HOST_PATH_MAX], line[512];
+        FILE *f;
+        join(p, opt->data_dir, "env.txt");
+        if ((f = fopen(p, "r")) != NULL) {
+            while (fgets(line, sizeof line, f)) {
+                char *eq, *end = line + strlen(line);
+                while (end > line && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ')) *--end = '\0';
+                if (line[0] == '#' || !(eq = strchr(line, '=')) || eq == line) continue;
+                *eq = '\0';
+                setenv(line, eq + 1, 1);
+                printf("[HOST] env.txt: %s=%s\n", line, eq + 1);
+            }
+            fclose(f);
+        }
+    }
+
     /* The Xbox has one CPU and titles rely on it (plain-store flags between threads). x86 hosts get
      * away with it through their strong memory order; an arm64 phone does not, so one guest thread
      * runs at a time here (toolkit kernel_bridge.c, the guest CPU lock). RECOMP_GUEST_LOCK=0 turns it off. */
