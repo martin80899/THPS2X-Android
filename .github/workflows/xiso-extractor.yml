@@ -1,0 +1,36 @@
+# Xbox ISO Extractor (tools/xiso-android): a small Android app that saves default.xbe, or every file,
+# out of an Xbox disc image. The APK is kept on the xiso-extractor-apk branch for a plain download link.
+name: xiso-extractor
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'tools/xiso-android/**', '.github/workflows/xiso-extractor.yml' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.12'
+      - name: APK
+        run: gradle -p tools/xiso-android assembleDebug --no-daemon
+      - name: Keep the APK on the xiso-extractor-apk branch
+        run: |
+          mkdir "$RUNNER_TEMP/out" && cd "$RUNNER_TEMP/out"
+          cp "$GITHUB_WORKSPACE/tools/xiso-android/app/build/outputs/apk/debug/app-debug.apk" XboxIsoExtractor.apk
+          printf 'Xbox ISO Extractor built from %s.\n' "$GITHUB_SHA" > README.md
+          git init -q -b xiso-extractor-apk
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com add -A
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -q -m "Xbox ISO Extractor for $GITHUB_SHA"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" xiso-extractor-apk
