@@ -143,7 +143,7 @@ index dafc4f3..87eca22 100644
  
  # Slang shaders (shader_pass.c): librashader's C header only, vendored in
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index 9c57fc8..a762430 100644
+index 9c57fc8..7adf50b 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
 @@ -1653,6 +1653,16 @@ static int hud_on(void)
@@ -557,7 +557,7 @@ index 9c57fc8..a762430 100644
  /* RECOMP_GL_DUMP while headless: the FXAA'd frame too, at the surface's
   * size (<prefix>NNNNN_fxaa.bmp), to check the pass without a window. */
  static void dump_fxaa(VkSurf *s, const char *path)
-@@ -7503,11 +7861,15 @@ static void vk_flip(void)
+@@ -7503,16 +7861,20 @@ static void vk_flip(void)
                  scale = ww / lw < wh / lh ? ww / lw : wh / lh;
                  dw = (int)(lw * scale); dh = (int)(lh * scale);
                  dx = ((int)ww - dw) / 2; dy = ((int)wh - dh) / 2;
@@ -573,7 +573,21 @@ index 9c57fc8..a762430 100644
                      || (fxaa_on()
                          && present_fxaa(pres, dst, s_sc_views[idx], s_sc_format, s_sc_extent, dx, dy, dw, dh,
                                          VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-@@ -7621,6 +7983,7 @@ static void vk_flip(void)
+                                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT)))) {
+-                if (hud_on()) {
++                if (hud_on() && !nv2a_vk_hud_external) {
+                     b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                     b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                     b.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+@@ -7614,13 +7976,14 @@ static void vk_flip(void)
+             create_swapchain();
+         }
+     }
+-    if (hud_on()) {
++    if (hud_on() || nv2a_vk_hud_external) {   /* a port's own counter: always counted */
+         hud_tick();
+     } else if (s_hud_last) {                        /* turned off: start afresh when it comes back */
+         s_hud_last = 0;
          s_hud_n = 0;
          s_hud_max = 0;
          s_hud_txt[0][0] = 0;

@@ -3695,7 +3695,11 @@ static void opt_build(int list)
     static const short wide[] = { VAL_MENUS, VAL_HUD };
     static const short picture[] = { VAL_ANISO, OPT_E_SUB + OPT_AA, VAL_UPSCALE, VAL_SHARP, VAL_STRETCH,
                                      VAL_BLUR, VAL_BRIGHT };
+#if defined(__ANDROID__)
+    static const short frame[] = { VAL_PACING, VAL_VSYNC, VAL_COUNTER };   /* no 120 FPS here for now */
+#else
     static const short frame[] = { VAL_FRAMERATE, VAL_PACING, VAL_VSYNC, VAL_COUNTER };
+#endif
     /* the game's four, then LAYOUT and the gameplay values (maintainer,
      * 2026-10-28); OPT_E_HINT: a text line without an action */
     /* the Y hint, a blank line (greyed: the cursor skips it, see
@@ -4081,32 +4085,169 @@ static void opt_lr(uint32_t screen, int dir, int pad)
  * (2) the windowed rectangle (nv2a_vk_window_rect) is saved once it has been
  * still for 60 swaps, as "x,y,w,h" in window_rect. */
 #if defined(__ANDROID__)
-/* ── The Android settings menu (back button / gear; TouchControls.java via touch_android.c) ───────────
- * A few RECOMP OPTIONS lines, changed from the UI thread: a tap only counts a step here, and the game
- * thread takes the steps at its next swap (thps_options_tick), through opt_val_step like the game's menu,
- * so the value is saved and applied exactly as there. */
-static const short s_android_opts[] = { VAL_RENDER, VAL_UPSCALE, VAL_SHARP, VAL_STRETCH, VAL_ASPECT,
-                                        VAL_FRAMERATE, VAL_ANISO, VAL_BRIGHT, VAL_FOV };
-#define ANDROID_OPTS ((int)(sizeof s_android_opts / sizeof s_android_opts[0]))
-static int s_android_req[ANDROID_OPTS];
+/* ── The Android settings menu (back button; SettingsMenu.java via touch_android.c) ───────────────────
+ * The RECOMP OPTIONS values, the antialiasing, the button cheats and the performance presets, in tabs.
+ * The UI thread only counts steps (thps_android_opt_step) and copies texts; the game thread takes the
+ * steps at its next swap (thps_options_tick), through opt_val_step like the game's own menu, so a value
+ * is saved and applied exactly as there, and writes the texts (the settings are the game thread's). */
+enum { AK_VAL, AK_AA, AK_CHEAT, AK_PRESET };
+typedef struct { unsigned char kind; short id; const char *group; } AItem;
+#define AI_VAL(v, g) { AK_VAL, v, g }
+static const AItem s_ai_fixed[] = {
+    { AK_PRESET, 0, "Graphics" },
+    AI_VAL(VAL_RENDER, "Graphics"), AI_VAL(VAL_UPSCALE, "Graphics"), AI_VAL(VAL_SHARP, "Graphics"),
+    { AK_AA, 0, "Graphics" }, AI_VAL(VAL_ANISO, "Graphics"), AI_VAL(VAL_BLUR, "Graphics"),
+    AI_VAL(VAL_STRETCH, "Display"), AI_VAL(VAL_ASPECT, "Display"), AI_VAL(VAL_MENUS, "Display"),
+    AI_VAL(VAL_HUD, "Display"), AI_VAL(VAL_BRIGHT, "Display"), AI_VAL(VAL_COUNTER, "Display"),
+    AI_VAL(VAL_FOV, "Camera"), AI_VAL(VAL_REMCAM, "Camera"), AI_VAL(VAL_FREECAM1, "Camera"),
+    AI_VAL(VAL_INVCAM1, "Camera"), AI_VAL(VAL_CAMSX1, "Camera"), AI_VAL(VAL_CAMSY1, "Camera"),
+    AI_VAL(VAL_CAMRS1, "Camera"),
+    AI_VAL(VAL_LAYOUT, "Gameplay"), AI_VAL(VAL_SPINTAPS, "Gameplay"), AI_VAL(VAL_SPECIALIN, "Gameplay"),
+    AI_VAL(VAL_MANUALS, "Gameplay"), AI_VAL(VAL_BIGDROP, "Gameplay"), AI_VAL(VAL_WALLBAIL, "Gameplay"),
+    AI_VAL(VAL_PHYSICS, "Gameplay"), AI_VAL(VAL_SCORECALC, "Gameplay"), AI_VAL(VAL_CAREER, "Gameplay"),
+    AI_VAL(VAL_TIPS, "Gameplay"), AI_VAL(VAL_SCORE, "Gameplay"), AI_VAL(VAL_CHAT, "Gameplay"),
+};
+#define AI_FIXED ((int)(sizeof s_ai_fixed / sizeof s_ai_fixed[0]))
+#define AI_COUNT (AI_FIXED + CHEAT_COUNT)
 
-int thps_android_opt_count(void) { return ANDROID_OPTS; }
+static AItem android_item(int i)
+{
+    AItem c = { AK_CHEAT, 0, "Cheats" };
+    if (i < AI_FIXED) return s_ai_fixed[i];
+    c.id = (short)(i - AI_FIXED);
+    return c;
+}
+
+/* PERFORMANCE PRESET: render lines, UPSCALING, FSR SHARPNESS, ANTIALIASING, ANISOTROPIC FILTER index */
+static const struct { const char *name; int lines, up, sharp, aa, aniso; } s_presets[] = {
+    { "BATTERY",  480,  1, 3, NV2A_VK_AA_FXAA, 2 },
+    { "BALANCED", 720,  1, 3, NV2A_VK_AA_FXAA, 3 },
+    { "QUALITY",  1080, 0, 3, NV2A_VK_AA_SMAA, 4 },
+    { "ULTRA",    1440, 0, 3, NV2A_VK_AA_MSAA4, 4 },
+};
+#define PRESETS ((int)(sizeof s_presets / sizeof s_presets[0]))
+
+static int preset_render_step(int p, int ws)
+{
+    int s, best = 0, last = opt_render_last(ws);
+    for (s = 1; s <= last; s++)
+        if (fabs(480.0 * opt_render_factor(s, ws) - s_presets[p].lines)
+            < fabs(480.0 * opt_render_factor(best, ws) - s_presets[p].lines))
+            best = s;
+    return best;
+}
+
+static int preset_now(void)                       /* the preset the values are, -1 custom */
+{
+    int p, ws = opt_val_index(VAL_ASPECT);
+    for (p = 0; p < PRESETS; p++)
+        if (opt_render_saved_step_for(ws, NULL) == preset_render_step(p, ws)
+            && opt_val_index(VAL_UPSCALE) == s_presets[p].up && opt_val_index(VAL_SHARP) == s_presets[p].sharp
+            && opt_aa_index() == s_presets[p].aa && opt_val_index(VAL_ANISO) == s_presets[p].aniso)
+            return p;
+    return -1;
+}
+
+static void android_set_aa(int to)
+{
+    s_aa_undo = opt_aa_index() + 1;                /* thps_options_tick: back to it if MSAA fails */
+    settings_set("antialiasing", s_aa_val[to]);
+    nv2a_vk_set_antialiasing(to);
+}
+
+static void android_val_to(int id, int to)        /* steps until the index is to (wraps; nval at most) */
+{
+    int k;
+    for (k = 0; k < s_val[id].nval && opt_val_index(id) != to; k++)
+        opt_val_step(id, 1);
+}
+
+static void preset_apply(int p)
+{
+    int ws = opt_val_index(VAL_ASPECT), target = preset_render_step(p, ws), k;
+    for (k = 0; k < 32; k++) {
+        int cur = opt_render_saved_step_for(ws, NULL);
+        if (cur == target || !opt_val_step(VAL_RENDER, target > cur ? 1 : -1))
+            break;                                 /* there, or the largest that fits */
+    }
+    android_val_to(VAL_UPSCALE, s_presets[p].up);
+    android_val_to(VAL_SHARP, s_presets[p].sharp);
+    android_val_to(VAL_ANISO, s_presets[p].aniso);
+    android_set_aa(s_presets[p].aa);
+    fprintf(stderr, "  options: performance preset %s\n", s_presets[p].name);
+}
+
+static const char *const s_aa_txt[5] = { "OFF", "FXAA", "SMAA", "MSAA 2X", "MSAA 4X" };
+
+int thps_android_opt_count(void) { return AI_COUNT; }
+
+const char *thps_android_opt_group(int i)
+{
+    return i >= 0 && i < AI_COUNT ? android_item(i).group : "";
+}
 
 const char *thps_android_opt_name(int i)
 {
-    return i >= 0 && i < ANDROID_OPTS ? s_val[s_android_opts[i]].label : "";
+    AItem it;
+    if (i < 0 || i >= AI_COUNT) return "";
+    it = android_item(i);
+    switch (it.kind) {
+    case AK_PRESET: return "PERFORMANCE PRESET";
+    case AK_AA:     return "ANTIALIASING";
+    case AK_CHEAT:  return s_cheats[it.id].text;
+    default:        return it.id == VAL_FREECAM1 ? "FREE CAMERA (RIGHT STICK)" : s_val[it.id].label;
+    }
 }
 
-/* 1 when the line applies only after the game is opened again */
-int thps_android_opt_restart(int i)
+/* one line under the name, in the menu */
+const char *thps_android_opt_desc(int i)
 {
-    return i >= 0 && i < ANDROID_OPTS && s_android_opts[i] == VAL_ASPECT;
+    AItem it;
+    if (i < 0 || i >= AI_COUNT) return "";
+    it = android_item(i);
+    if (it.kind == AK_PRESET) return "Sets resolution, upscaling, antialiasing and filtering at once";
+    if (it.kind == AK_AA) return "Smooths jagged edges. MSAA looks best and costs the most";
+    if (it.kind == AK_CHEAT) return s_cheats[it.id].va ? "Main menus only. Tap to switch" : "Main menus only. Tap to do it";
+    switch (it.id) {
+    case VAL_RENDER:    return "How sharp the 3D image is. Lower is faster";
+    case VAL_UPSCALE:   return "How the image is scaled to the screen. FSR 1 sharpens lower resolutions";
+    case VAL_SHARP:     return "How strongly FSR 1 sharpens";
+    case VAL_ANISO:     return "Keeps ground and ramp textures sharp at an angle";
+    case VAL_BLUR:      return "The game's own motion blur";
+    case VAL_STRETCH:   return "Stretch fills the whole screen";
+    case VAL_ASPECT:    return "Full screen uses your phone's own shape. Applies after a restart";
+    case VAL_MENUS:     return "The 4:3 menu screens with bars or stretched";
+    case VAL_HUD:       return "The score and special meter, widescreen-corrected or stretched";
+    case VAL_BRIGHT:    return "Display brightness";
+    case VAL_COUNTER:   return "The FPS badge in the top corner";
+    case VAL_FOV:       return "A wider view for widescreen";
+    case VAL_REMCAM:    return "Keeps the camera you flipped to between levels";
+    case VAL_FREECAM1:  return "Look around with the right stick (controller, player 1)";
+    case VAL_INVCAM1:   return "Turns the free camera's axes round";
+    case VAL_CAMSX1:    return "Free camera speed, left and right";
+    case VAL_CAMSY1:    return "Free camera speed, up and down";
+    case VAL_CAMRS1:    return "How fast the camera swings back behind the skater";
+    case VAL_LAYOUT:    return "PS2 uses the PlayStation 2 version's button layout";
+    case VAL_SPINTAPS:  return "Tapping the shoulder buttons to spin 180s";
+    case VAL_SPECIALIN: return "Loose accepts special tricks entered a little imprecisely";
+    case VAL_MANUALS:   return "Off plays like THPS 1, without manuals";
+    case VAL_BIGDROP:   return "What happens when you land a drop that is too high";
+    case VAL_WALLBAIL:  return "Grinding straight into a wall";
+    case VAL_PHYSICS:   return "Original THPS 2 PS1 gravity and a flatter ollie";
+    case VAL_SCORECALC: return "THPS 1 scoring outside the campaign";
+    case VAL_CAREER:    return "Classic: the THPS 1 levels in the career. Applies to a new career";
+    case VAL_TIPS:      return "Trick names shown while skating";
+    case VAL_SCORE:     return "The score on screen";
+    case VAL_CHAT:      return "Quick chat in multiplayer";
+    default:            return "";
+    }
 }
 
-/* The value texts, written by the game thread (android_opt_drain: settings are the game thread's) and
- * copied out under s_android_lock, so the UI thread never reads the settings themselves. */
-static char s_android_txt[ANDROID_OPTS][64];
+/* The value texts and the pending steps */
+static char s_android_txt[AI_COUNT][48];
+static int s_android_req[AI_COUNT];               /* the sum of the steps asked, -n .. +n */
 static volatile int s_android_lock;
+static int8_t s_android_refused = -1;             /* the cheat the game did not take at the last tap */
 
 static void android_lock(void)   { while (__atomic_test_and_set(&s_android_lock, __ATOMIC_ACQUIRE)) {} }
 static void android_unlock(void) { __atomic_clear(&s_android_lock, __ATOMIC_RELEASE); }
@@ -4115,45 +4256,95 @@ void thps_android_opt_value(int i, char *out, size_t n)
 {
     if (!n) return;
     out[0] = 0;
-    if (i < 0 || i >= ANDROID_OPTS) return;
+    if (i < 0 || i >= AI_COUNT) return;
     android_lock();
     snprintf(out, n, "%s", s_android_txt[i][0] ? s_android_txt[i] : "...");
     android_unlock();
 }
 
-void thps_android_opt_next(int i)
+void thps_android_opt_step(int i, int dir)
 {
-    if (i >= 0 && i < ANDROID_OPTS)
-        __atomic_add_fetch(&s_android_req[i], 1, __ATOMIC_SEQ_CST);
+    if (i >= 0 && i < AI_COUNT && dir)
+        __atomic_add_fetch(&s_android_req[i], dir > 0 ? 1 : -1, __ATOMIC_SEQ_CST);
 }
 
-static int opt_val_step(int id, int dir);
-static void opt_val_text(int id, char *out, size_t n);
+static void android_take(int i, int dir)
+{
+    AItem it = android_item(i);
+    switch (it.kind) {
+    case AK_PRESET: {
+        int p = preset_now();
+        p = p < 0 ? (dir > 0 ? 0 : PRESETS - 1) : (p + dir + PRESETS) % PRESETS;
+        preset_apply(p);
+        break;
+    }
+    case AK_AA:
+        android_set_aa((opt_aa_index() + dir + 5) % 5);
+        break;
+    case AK_CHEAT: {
+        int r;
+        s_android_refused = -1;
+        if (s_in_level) { s_android_refused = (int8_t)it.id; break; }   /* the checker: front end only */
+        r = cheat_enter(it.id);
+        if (r == 1 && !s_cheats[it.id].va)
+            s_cheat_done[it.id] = 1;
+        else if (r != 1)
+            s_android_refused = (int8_t)it.id;
+        fprintf(stderr, "  options: cheat %s -> %d\n", s_cheats[it.id].code, r);
+        break;
+    }
+    default:
+        if (it.id == VAL_RENDER) {                 /* the ends wrap round */
+            if (!opt_val_step(it.id, dir))
+                while (opt_val_step(it.id, -dir)) {}
+        } else if (it.id >= VAL_FIRST_GAME && it.id <= VAL_LAST_GAME) {
+            opt_val_step(it.id, 1);                /* ON <-> OFF */
+        } else {
+            opt_val_step(it.id, dir);
+        }
+    }
+}
+
+static void android_text(int i, char *out, size_t n)
+{
+    AItem it = android_item(i);
+    char line[128];
+    const char *c;
+    switch (it.kind) {
+    case AK_PRESET: { int p = preset_now(); snprintf(out, n, "%s", p < 0 ? "CUSTOM" : s_presets[p].name); return; }
+    case AK_AA:     snprintf(out, n, "%s", s_aa_txt[opt_aa_index()]); return;
+    case AK_CHEAT:
+        snprintf(out, n, "%s", it.id == s_android_refused ? (s_in_level ? "MENUS ONLY" : "NOT HERE")
+                 : !s_cheats[it.id].va ? (s_cheat_done[it.id] ? "DONE" : "DO IT") : cheat_on(it.id) ? "ON" : "OFF");
+        return;
+    default:
+        opt_val_text(it.id, line, sizeof line);
+        c = strstr(line, ": ");                    /* "LABEL: VALUE" -> "VALUE" */
+        snprintf(out, n, "%s", c ? c + 2 : line);
+    }
+}
+
 static void android_opt_drain(void)
 {
     static unsigned s_frames;
+    static int s_fixed;
     int i, any = 0;
-    for (i = 0; i < ANDROID_OPTS; i++) {
-        int n = __atomic_exchange_n(&s_android_req[i], 0, __ATOMIC_SEQ_CST), id = s_android_opts[i];
-        while (n-- > 0) {
-            if (id == VAL_RENDER) {
-                if (!opt_val_step(id, 1))                /* past the largest: back to the first */
-                    while (opt_val_step(id, -1)) {}
-            } else {
-                opt_val_step(id, 1);
-            }
-            any = 1;
+    if (!s_fixed) {                                /* 120 FPS is off on Android for now */
+        s_fixed = 1;
+        if (strcmp(settings_get("frame_rate", "original"), "original")) {
+            settings_set("frame_rate", "original");
+            s_fps_next_ns = 0;
         }
     }
+    for (i = 0; i < AI_COUNT; i++) {
+        int n = __atomic_exchange_n(&s_android_req[i], 0, __ATOMIC_SEQ_CST);
+        for (; n; n += n > 0 ? -1 : 1, any = 1)
+            android_take(i, n > 0 ? 1 : -1);
+    }
     if (any || s_frames++ % 30 == 0) {             /* the texts: after a change, else twice a second */
-        char t[ANDROID_OPTS][64];
-        for (i = 0; i < ANDROID_OPTS; i++) {
-            char line[128];
-            const char *c;
-            opt_val_text(s_android_opts[i], line, sizeof line);
-            c = strstr(line, ": ");                /* "LABEL: VALUE" -> "VALUE" */
-            snprintf(t[i], sizeof t[i], "%s", c ? c + 2 : line);
-        }
+        static char t[AI_COUNT][48];
+        for (i = 0; i < AI_COUNT; i++)
+            android_text(i, t[i], sizeof t[i]);
         android_lock();
         memcpy(s_android_txt, t, sizeof t);
         android_unlock();

@@ -88,36 +88,44 @@ Java_io_github_martin80899_thps2x_TouchControls_nativeDataDir(JNIEnv *env, jclas
     return (*env)->NewStringUTF(env, host_android_data_dir());
 }
 
-/* The Android settings menu: the game's RECOMP OPTIONS lines (recomp_manual.c), read and stepped. */
+/* The Android settings menu: the game's options in tabs (recomp_manual.c), read and stepped. */
 extern int thps_android_opt_count(void);
+extern const char *thps_android_opt_group(int i);
 extern const char *thps_android_opt_name(int i);
-extern int thps_android_opt_restart(int i);
+extern const char *thps_android_opt_desc(int i);
 extern void thps_android_opt_value(int i, char *out, size_t n);
-extern void thps_android_opt_next(int i);
+extern void thps_android_opt_step(int i, int dir);
 
 JNIEXPORT jint JNICALL
-Java_io_github_martin80899_thps2x_TouchControls_nativeOptCount(JNIEnv *env, jclass cls)
+Java_io_github_martin80899_thps2x_SettingsMenu_nativeOptCount(JNIEnv *env, jclass cls)
 {
     (void)env; (void)cls;
     return thps_android_opt_count();
 }
 
 JNIEXPORT jstring JNICALL
-Java_io_github_martin80899_thps2x_TouchControls_nativeOptName(JNIEnv *env, jclass cls, jint i)
+Java_io_github_martin80899_thps2x_SettingsMenu_nativeOptGroup(JNIEnv *env, jclass cls, jint i)
+{
+    (void)cls;
+    return (*env)->NewStringUTF(env, thps_android_opt_group(i));
+}
+
+JNIEXPORT jstring JNICALL
+Java_io_github_martin80899_thps2x_SettingsMenu_nativeOptName(JNIEnv *env, jclass cls, jint i)
 {
     (void)cls;
     return (*env)->NewStringUTF(env, thps_android_opt_name(i));
 }
 
-JNIEXPORT jboolean JNICALL
-Java_io_github_martin80899_thps2x_TouchControls_nativeOptRestart(JNIEnv *env, jclass cls, jint i)
+JNIEXPORT jstring JNICALL
+Java_io_github_martin80899_thps2x_SettingsMenu_nativeOptDesc(JNIEnv *env, jclass cls, jint i)
 {
-    (void)env; (void)cls;
-    return thps_android_opt_restart(i) ? JNI_TRUE : JNI_FALSE;
+    (void)cls;
+    return (*env)->NewStringUTF(env, thps_android_opt_desc(i));
 }
 
 JNIEXPORT jstring JNICALL
-Java_io_github_martin80899_thps2x_TouchControls_nativeOptValue(JNIEnv *env, jclass cls, jint i)
+Java_io_github_martin80899_thps2x_SettingsMenu_nativeOptValue(JNIEnv *env, jclass cls, jint i)
 {
     char v[96];
     (void)cls;
@@ -126,10 +134,10 @@ Java_io_github_martin80899_thps2x_TouchControls_nativeOptValue(JNIEnv *env, jcla
 }
 
 JNIEXPORT void JNICALL
-Java_io_github_martin80899_thps2x_TouchControls_nativeOptNext(JNIEnv *env, jclass cls, jint i)
+Java_io_github_martin80899_thps2x_SettingsMenu_nativeOptStep(JNIEnv *env, jclass cls, jint i, jint dir)
 {
     (void)env; (void)cls;
-    thps_android_opt_next(i);
+    thps_android_opt_step(i, dir);
 }
 
 /* The FPS badge (TouchControls draws it): frames per second and the longest frame of the last half

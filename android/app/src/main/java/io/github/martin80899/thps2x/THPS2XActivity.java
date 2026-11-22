@@ -39,19 +39,38 @@ public class THPS2XActivity extends SDLActivity {
     private TouchControls touch;
 
     /** The phone's back (gesture, navigation bar or key) opens the settings instead of leaving the game.
-     *  A game controller's own buttons still go to the game. */
+     *  A controller: Back + Start pressed together (opened when both are let go, so the game sees them
+     *  released) or the Guide button, where Android passes it on. */
+    private boolean padSelect, padStart, padCombo;
+
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
-        if (e.getKeyCode() == KeyEvent.KEYCODE_BACK && touch != null) {
-            InputDevice d = e.getDevice();
-            int src = e.getSource();
-            boolean pad = d != null && !d.isVirtual()
-                && ((src & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
-                    || (src & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK);
-            if (!pad) {
-                if (e.getAction() == KeyEvent.ACTION_UP && !e.isCanceled()) touch.toggleSettings();
-                return true;
+        int code = e.getKeyCode();
+        InputDevice d = e.getDevice();
+        int src = e.getSource();
+        boolean pad = d != null && !d.isVirtual()
+            && ((src & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+                || (src & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK);
+        if (touch == null) return super.dispatchKeyEvent(e);
+        if (code == KeyEvent.KEYCODE_BACK && !pad) {
+            if (e.getAction() == KeyEvent.ACTION_UP && !e.isCanceled()) touch.toggleSettings();
+            return true;
+        }
+        if (pad && code == KeyEvent.KEYCODE_BUTTON_MODE) {
+            if (e.getAction() == KeyEvent.ACTION_UP) touch.toggleSettings();
+            return true;
+        }
+        if (pad && (code == KeyEvent.KEYCODE_BUTTON_SELECT || code == KeyEvent.KEYCODE_BACK
+                    || code == KeyEvent.KEYCODE_BUTTON_START)) {
+            boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+            if (code == KeyEvent.KEYCODE_BUTTON_START) padStart = down; else padSelect = down;
+            if (padSelect && padStart) padCombo = true;
+            boolean r = super.dispatchKeyEvent(e);
+            if (padCombo && !padSelect && !padStart) {
+                padCombo = false;
+                touch.toggleSettings();
             }
+            return r;
         }
         return super.dispatchKeyEvent(e);
     }
