@@ -47,6 +47,8 @@ int thps_vk_check(char *found, size_t n)
     const char *lib = "vulkan-1.dll";
 #elif defined(__APPLE__)
     const char *lib = "libvulkan.1.dylib";
+#elif defined(__ANDROID__)
+    const char *lib = "libvulkan.so";      /* Android's loader has no .so.1 name */
 #else
     const char *lib = "libvulkan.so.1";
 #endif
@@ -148,6 +150,14 @@ int thps_vk_check(char *found, size_t n)
 
 void thps_vk_message(char *out, size_t n, const char *found)
 {
+#if defined(__ANDROID__)
+    snprintf(out, n,
+             "I am sorry - THPS 2X needs a phone whose graphics support Vulkan 1.3, and this phone's do not.\n\n"
+             "Found: %s\n\n"
+             "A system update sometimes brings a newer graphics driver.",
+             found && *found ? found : "nothing");
+    return;
+#endif
     snprintf(out, n,
              "I am sorry - THPS 2X Recomp unfortunately only supports graphics cards with at least "
              "Vulkan 1.3, and this PC does not have one.\n\n"
