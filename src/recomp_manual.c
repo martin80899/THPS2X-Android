@@ -2874,6 +2874,7 @@ static uint32_t s_bind_cursor;
 #endif
 enum { VAL_DISPMODE, VAL_RENDER, VAL_ASPECT, VAL_MENUS, VAL_ANISO, VAL_FRAMERATE, VAL_PACING, VAL_VSYNC, VAL_COUNTER,
        VAL_FOV, VAL_HUD, VAL_BRIGHT,                              /* v1.2.2: HUD AT 16:9 (#10), BRIGHTNESS (#11) */
+       VAL_UPSCALE, VAL_SHARP, VAL_STRETCH,                       /* UPSCALING, FSR SHARPNESS, SCREEN FIT */
        VAL_TIPS, VAL_SCORE, VAL_CHAT, VAL_BLUR,
        VAL_LAYOUT, VAL_SPINTAPS, VAL_BIGDROP, VAL_WALLBAIL, VAL_CAREER, VAL_MANUALS, VAL_PHYSICS, VAL_SCORECALC,
        VAL_SPECIALIN,                                             /* SPECIAL TRICKS INPUT (GitHub #15) */
@@ -3160,6 +3161,14 @@ static const OptVal s_val[VAL_COUNT] = {
      * (thps_gamma_apply); at once */
     [VAL_BRIGHT]    = { "BRIGHTNESS", "brightness", "0", { "-3", "-2", "-1", "0", "1", "2", "3", "4", "5" },
                         { "-3", "-2", "-1", "ORIGINAL", "+1", "+2", "+3", "+4", "+5" }, 9 },
+    /* UPSCALING / FSR SHARPNESS / SCREEN FIT (Android port, 2026-11-22): how the frame is scaled to the
+     * screen (toolkit nv2a_vk_set_upscale: FSR 1 = AMD FidelityFX EASU + RCAS), at once */
+    [VAL_UPSCALE]   = { "UPSCALING", "upscaling", "off", { "off", "fsr", "lanczos", "nearest" },
+                        { "BILINEAR", "FSR 1", "LANCZOS", "NEAREST" }, 4 },
+    [VAL_SHARP]     = { "FSR SHARPNESS", "fsr_sharpness", "3", { "0", "1", "2", "3", "4" },
+                        { "OFF", "LOW", "MEDIUM", "HIGH", "MAX" }, 5 },
+    [VAL_STRETCH]   = { "SCREEN FIT", "screen_fit", "aspect", { "aspect", "stretch" },
+                        { "KEEP ASPECT", "STRETCH" }, 2 },
     [VAL_ANISO]     = { "ANISOTROPIC FILTER", "anisotropic_filter", "16", { "off", "2", "4", "8", "16" },
                         { "OFF", "2X", "4X", "8X", "16X" }, 5 },
     [VAL_FRAMERATE] = { "FRAME RATE", "frame_rate", "original", { "original", "120" }, { "ORIGINAL 60", "120" }, 2 },
@@ -3526,6 +3535,9 @@ void thps_options_apply(void)
     s_boot_start = boot_on();
     nv2a_vk_set_display_mode(opt_display_mode());
     nv2a_vk_set_antialiasing(opt_aa_index());
+    nv2a_vk_set_upscale(opt_val_index(VAL_UPSCALE));
+    nv2a_vk_set_sharpness(opt_val_index(VAL_SHARP));
+    nv2a_vk_set_stretch(opt_val_index(VAL_STRETCH));
     {
         /* the windowed rectangle saved last time (thps_options_tick) */
         int x, y, w, h;
@@ -3681,7 +3693,8 @@ static void opt_build(int list)
                                     OPT_E_SUB + OPT_PICTURE, OPT_E_SUB + OPT_FPS, OPT_E_SUB + OPT_SHADERS,
                                     OPT_E_SUB + OPT_CHEATS, OPT_E_SUB + OPT_BOOT };
     static const short wide[] = { VAL_MENUS, VAL_HUD };
-    static const short picture[] = { VAL_ANISO, OPT_E_SUB + OPT_AA, VAL_BLUR, VAL_BRIGHT };
+    static const short picture[] = { VAL_ANISO, OPT_E_SUB + OPT_AA, VAL_UPSCALE, VAL_SHARP, VAL_STRETCH,
+                                     VAL_BLUR, VAL_BRIGHT };
     static const short frame[] = { VAL_FRAMERATE, VAL_PACING, VAL_VSYNC, VAL_COUNTER };
     /* the game's four, then LAYOUT and the gameplay values (maintainer,
      * 2026-10-28); OPT_E_HINT: a text line without an action */
@@ -3830,6 +3843,12 @@ static int opt_val_step(int id, int dir)
             s_hud_stretched = opt_hud_stretched();  /* at once (sub_00018F90 per frame) */
         else if (id == VAL_BRIGHT)
             thps_gamma_apply();                    /* at once */
+        else if (id == VAL_UPSCALE)
+            nv2a_vk_set_upscale(to);               /* at once */
+        else if (id == VAL_SHARP)
+            nv2a_vk_set_sharpness(to);
+        else if (id == VAL_STRETCH)
+            nv2a_vk_set_stretch(to);
     }
     return 1;
 }

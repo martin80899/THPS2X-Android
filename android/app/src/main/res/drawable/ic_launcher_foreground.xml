@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The port's icon (assets/icon.svg): a plain skateboard, an original drawing - no game logo or branding. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="384" android:viewportHeight="384">
+  <group android:translateX="64" android:translateY="64">
+    <group android:rotation="-35" android:pivotX="128" android:pivotY="128">
+<path android:fillColor="#F2C94C" android:strokeColor="#1B1F27" android:strokeWidth="4" android:pathData="M54,70h14a8,8 0,0 1,8,8v6a8,8 0,0 1,-8,8h-14a8,8 0,0 1,-8,-8v-6a8,8 0,0 1,8,-8z"/>
+<path android:fillColor="#F2C94C" android:strokeColor="#1B1F27" android:strokeWidth="4" android:pathData="M54,164h14a8,8 0,0 1,8,8v6a8,8 0,0 1,-8,8h-14a8,8 0,0 1,-8,-8v-6a8,8 0,0 1,8,-8z"/>
+<path android:fillColor="#F2C94C" android:strokeColor="#1B1F27" android:strokeWidth="4" android:pathData="M188,70h14a8,8 0,0 1,8,8v6a8,8 0,0 1,-8,8h-14a8,8 0,0 1,-8,-8v-6a8,8 0,0 1,8,-8z"/>
+<path android:fillColor="#F2C94C" android:strokeColor="#1B1F27" android:strokeWidth="4" android:pathData="M188,164h14a8,8 0,0 1,8,8v6a8,8 0,0 1,-8,8h-14a8,8 0,0 1,-8,-8v-6a8,8 0,0 1,8,-8z"/>
+<path android:fillColor="#C9CED6" android:pathData="M60,88h2a4,4 0,0 1,4,4v72a4,4 0,0 1,-4,4h-2a4,4 0,0 1,-4,-4v-72a4,4 0,0 1,4,-4z"/>
+<path android:fillColor="#C9CED6" android:pathData="M194,88h2a4,4 0,0 1,4,4v72a4,4 0,0 1,-4,4h-2a4,4 0,0 1,-4,-4v-72a4,4 0,0 1,4,-4z"/>
+<path android:fillColor="#2B6CB0" android:strokeColor="#E8EDF3" android:strokeWidth="6" android:pathData="M52,96h152a32,32 0,0 1,32,32v0a32,32 0,0 1,-32,32h-152a32,32 0,0 1,-32,-32v0a32,32 0,0 1,32,-32z"/>
+<path android:fillColor="#E8EDF3" android:fillAlpha="0.35" android:pathData="M60,120h136a8,8 0,0 1,8,8v0a8,8 0,0 1,-8,8h-136a8,8 0,0 1,-8,-8v0a8,8 0,0 1,8,-8z"/>
+    </group>
+  </group>
+</vector>
