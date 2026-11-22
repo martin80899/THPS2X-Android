@@ -79,7 +79,8 @@ set(THPS_GAME_SOURCES
 if(ANDROID)
     # Android (arm64): the game is libmain.so, which SDL3's SDLActivity loads and whose SDL_main it
     # calls (main.c's main, renamed). Platform layer: src/platform/host_android.c.
-    add_library(${PROJECT_NAME} SHARED ${THPS_GAME_SOURCES} src/platform/host_android.c src/platform/touch_android.c)
+    add_library(${PROJECT_NAME} SHARED ${THPS_GAME_SOURCES} src/platform/host_android.c src/platform/touch_android.c
+        src/platform/perf_android.c)
     set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME main)
     set_source_files_properties(src/main.c PROPERTIES COMPILE_DEFINITIONS "main=SDL_main")
 else()

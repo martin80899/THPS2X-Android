@@ -4324,13 +4324,42 @@ static void android_text(int i, char *out, size_t n)
     }
 }
 
+/* Back from the home screen (or another app): the window thread was held while the app was away, so the
+ * game stood still; a moment after it is back, Start opens the pause menu when a run is going and no
+ * in-level screen is up ([0x003068DC], see HUD AT 16:9) - the player picks it up from PAUSE. */
+static volatile int s_android_fg;
+static void android_foreground(void) { s_android_fg = 1; }
+
+static void android_pause_tick(void)
+{
+    static int wait, press;
+    if (s_android_fg) {
+        s_android_fg = 0;
+        wait = 20;
+    }
+    if (wait > 0 && --wait == 0 && s_in_level && !GUEST8(0x003068DCu)) {
+        press = 8;
+        fprintf(stderr, "  android: back in the foreground -> pause menu\n");
+    }
+    if (press > 0) {
+        extern void touch_android_start(int down);   /* platform/touch_android.c */
+        touch_android_start(--press > 2);          /* held 6 frames, then let go */
+    }
+}
+
 static void android_opt_drain(void)
 {
     static unsigned s_frames;
     static int s_fixed;
     int i, any = 0;
+    {
+        extern void perf_android_frame(int report);   /* the game's thread too (platform/perf_android.c) */
+        perf_android_frame(0);
+    }
+    android_pause_tick();
     if (!s_fixed) {                                /* 120 FPS is off on Android for now */
         s_fixed = 1;
+        nv2a_vk_set_foreground_handler(android_foreground);
         if (strcmp(settings_get("frame_rate", "original"), "original")) {
             settings_set("frame_rate", "original");
             s_fps_next_ns = 0;

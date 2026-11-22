@@ -188,3 +188,14 @@ Java_io_github_martin80899_thps2x_TouchControls_nativeRumbleSetup(JNIEnv *env, j
     }
     xbox_rumble_pad_percent = pad_percent;
 }
+
+/* Start on player 1 through the touch state (the pause on coming back, recomp_manual.c); let go = all
+ * released, which a connected controller's own state is merged over unchanged */
+void touch_android_start(int down)
+{
+    XBOX_GAMEPAD g;
+    memset(&g, 0, sizeof g);
+    if (down)
+        g.wButtons = XBOX_GAMEPAD_START;
+    xbox_InputTouchState(&g);
+}

@@ -186,16 +186,20 @@ index dafc4f3..87eca22 100644
  
  # Slang shaders (shader_pass.c): librashader's C header only, vendored in
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index 9c57fc8..7adf50b 100644
+index 9c57fc8..0356bb3 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
-@@ -1653,6 +1653,16 @@ static int hud_on(void)
+@@ -1653,6 +1653,20 @@ static int hud_on(void)
      return hud_mode() != NV2A_VK_HUD_OFF;
  }
  
 +/* The latest frame statistics (hud_tick), for a HUD the port draws itself (Android's FPS badge). With
 + * nv2a_vk_hud_external set, the renderer counts but draws nothing. */
 +volatile int nv2a_vk_hud_external;
++void (*volatile nv2a_vk_flip_hook)(void);        /* every flip, on the renderer's thread (nv2a_vk.h) */
++/* Android: called on the window thread when the app is back in the foreground (the port pauses the game) */
++static void (*volatile s_fg_handler)(void);
++void nv2a_vk_set_foreground_handler(void (*fn)(void)) { s_fg_handler = fn; }
 +static volatile float s_stat_fps, s_stat_ms;
 +void nv2a_vk_frame_stats(float *fps, float *ms)
 +{
@@ -206,7 +210,7 @@ index 9c57fc8..7adf50b 100644
  void nv2a_vk_set_fps_hud(int mode)
  {
      s_hud_opt = mode >= NV2A_VK_HUD_OFF && mode <= NV2A_VK_HUD_MS ? mode : NV2A_VK_HUD_OFF;
-@@ -1674,6 +1684,8 @@ static void hud_tick(void)
+@@ -1674,6 +1688,8 @@ static void hud_tick(void)
      if (now - s_hud_t0 >= 500000000ull && s_hud_n) {
          double fps = (double)s_hud_n * 1e9 / (double)(now - s_hud_t0);
          double ms = (double)s_hud_max / 1e6;
@@ -215,7 +219,7 @@ index 9c57fc8..7adf50b 100644
          snprintf(s_hud_txt[0], sizeof s_hud_txt[0], "%u", (unsigned)(fps + 0.5));
          snprintf(s_hud_txt[1], sizeof s_hud_txt[1], "%.1f", ms > 999.0 ? 999.0 : ms);
          s_hud_t0 = now;
-@@ -1705,7 +1717,15 @@ static void hud_rect(VkImageBlit *bl, int x, int y, int w, int h)
+@@ -1705,7 +1721,15 @@ static void hud_rect(VkImageBlit *bl, int x, int y, int w, int h)
  }
  
  /* dst is in TRANSFER_DST_OPTIMAL and was just written by transfers. */
@@ -231,7 +235,7 @@ index 9c57fc8..7adf50b 100644
  {
      VkImageBlit bl[128];
      VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-@@ -3458,7 +3478,16 @@ static int create_swapchain(void)
+@@ -3458,7 +3482,16 @@ static int create_swapchain(void)
      ci.imageExtent = s_sc_extent;
      ci.imageArrayLayers = 1;
      ci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -248,7 +252,50 @@ index 9c57fc8..7adf50b 100644
      ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
      ci.presentMode = mode;
      ci.clipped = VK_TRUE;
-@@ -3781,7 +3810,13 @@ static int ready(void)
+@@ -3494,6 +3527,42 @@ static int create_swapchain(void)
+     return 1;
+ }
+ 
++#if defined(__ANDROID__)
++/* Android takes the window's surface away when the app goes to the background (home button, another
++ * app); the VkSurfaceKHR made for it is dead when the app comes back, and the game stayed black. On
++ * DID_ENTER_FOREGROUND (win_events) or a SURFACE_LOST, the next flip makes a new surface from the
++ * window SDL has again, and a swapchain for it. */
++static volatile int s_surface_stale;
++
++static int recreate_surface(void)
++{
++    uint32_t i;
++    int ok;
++    vkDeviceWaitIdle(s_dev);
++    for (i = 0; i < 8; i++)
++        if (s_sc_views[i]) {
++            vkDestroyImageView(s_dev, s_sc_views[i], NULL);
++            s_sc_views[i] = VK_NULL_HANDLE;
++        }
++    if (s_swapchain) {
++        vkDestroySwapchainKHR(s_dev, s_swapchain, NULL);
++        s_swapchain = VK_NULL_HANDLE;
++    }
++    if (s_surface) {
++        vkDestroySurfaceKHR(s_inst, s_surface, NULL);
++        s_surface = VK_NULL_HANDLE;
++    }
++    if (!SDL_Vulkan_CreateSurface(s_win, s_inst, NULL, &s_surface)) {
++        LOGE("surface: a new one could not be made (SDL: %s); trying again at the next frame\n", SDL_GetError());
++        s_surface = VK_NULL_HANDLE;
++        return 0;
++    }
++    ok = create_swapchain();
++    LOGE("surface: made again after the app came back (%s)\n", ok ? "swapchain ready" : "no swapchain yet");
++    return ok;
++}
++#endif
++
+ /* The renderer cannot start: never go on headless (THPS 2X player report,
+  * 2026-10-29: an RX 580 whose Windows driver lacks dynamic vertex input ran the
+  * game on without a picture and without a word). The reason goes to the log,
+@@ -3781,7 +3850,13 @@ static int ready(void)
                          did = SDL_GetPrimaryDisplay();
                      dm = did ? SDL_GetDesktopDisplayMode(did) : NULL;
                      if (dm && dm->w > 0 && dm->h > 0)
@@ -262,7 +309,7 @@ index 9c57fc8..7adf50b 100644
                  }
                  aspect = (float)xbox_video_aspect();   /* 4:3, 16:9, 16:10, 21:9 (2026-11-07) */
                  int ww = (int)(wh * aspect + 0.5f);
-@@ -3868,7 +3903,13 @@ static int ready(void)
+@@ -3868,7 +3943,13 @@ static int ready(void)
      {
          const char *e = getenv("RECOMP_VK_NO_DYN_VERTEX_INPUT");
          int dyn = vk_dyn_vertex_input(s_pd);
@@ -276,7 +323,7 @@ index 9c57fc8..7adf50b 100644
          if (s_baked_vi)
              fprintf(stderr, "  [VK] vertex input baked into the pipelines (%s)\n",
                      dyn ? "RECOMP_VK_NO_DYN_VERTEX_INPUT=1" : "no " VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
-@@ -6295,6 +6336,323 @@ static int present_fxaa(VkSurf *s, VkImage dst, VkImageView dview, VkFormat fmt,
+@@ -6295,6 +6376,323 @@ static int present_fxaa(VkSurf *s, VkImage dst, VkImageView dview, VkFormat fmt,
      return 1;
  }
  
@@ -600,7 +647,39 @@ index 9c57fc8..7adf50b 100644
  /* RECOMP_GL_DUMP while headless: the FXAA'd frame too, at the surface's
   * size (<prefix>NNNNN_fxaa.bmp), to check the pass without a window. */
  static void dump_fxaa(VkSurf *s, const char *path)
-@@ -7503,16 +7861,20 @@ static void vk_flip(void)
+@@ -7468,7 +7866,16 @@ static void vk_flip(void)
+      * which serves the pushbuffer path and an HLE Present alike. */
+ 
+     VT("flip %u: surface %08X drew %d, acquiring\n", s_frame, s ? s->va : 0, s_drew_any);
++#if defined(__ANDROID__)
++    if (!s_headless && (s_surface_stale || !s_swapchain)) {
++        s_surface_stale = 0;
++        if (!recreate_surface())
++            s_surface_stale = 1;                   /* no window yet: no picture this frame */
++    }
++    if (!s_headless && s_swapchain) {
++#else
+     if (!s_headless) {
++#endif
+         VkResult rr;
+         long long t_acq = xbox_ft_on() ? xbox_ft_now() : 0;
+         xbox_ft_push(FT_PRESENT);
+@@ -7479,7 +7886,14 @@ static void vk_flip(void)
+             xbox_ft_acquire(xbox_ft_ms(t_acq));  /* shown on its own: which of the two calls blocks */
+         if (rr == VK_ERROR_OUT_OF_DATE_KHR) {
+             vkDeviceWaitIdle(s_dev);
++#if defined(__ANDROID__)
++            if (!create_swapchain())
++                s_surface_stale = 1;
++        } else if (rr == VK_ERROR_SURFACE_LOST_KHR) {
++            s_surface_stale = 1;
++#else
+             create_swapchain();
++#endif
+         } else if (rr == VK_SUCCESS || rr == VK_SUBOPTIMAL_KHR) {
+             VkImage dst = s_sc_images[idx];
+             VT("flip %u: acquired image %u\n", s_frame, idx);
+@@ -7503,16 +7917,20 @@ static void vk_flip(void)
                  scale = ww / lw < wh / lh ? ww / lw : wh / lh;
                  dw = (int)(lw * scale); dh = (int)(lh * scale);
                  dx = ((int)ww - dw) / 2; dy = ((int)wh - dh) / 2;
@@ -622,9 +701,27 @@ index 9c57fc8..7adf50b 100644
                      b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
                      b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
                      b.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-@@ -7614,13 +7976,14 @@ static void vk_flip(void)
+@@ -7609,18 +8027,32 @@ static void vk_flip(void)
+             extern void xbox_GuestPresentNote(void);   /* RECOMP_PACING_STATS (FRAME PACING) */
+             xbox_GuestPresentNote();
+         }
++#if defined(__ANDROID__)
++        /* Not on SUBOPTIMAL here: Android answers every present with it while the image is not pre-rotated
++         * (preTransform IDENTITY, see create_swapchain), and a new swapchain each frame - with a
++         * vkDeviceWaitIdle - halved the frame rate. */
++        if (pr == VK_ERROR_SURFACE_LOST_KHR)
++            s_surface_stale = 1;
++        else if (pr == VK_ERROR_OUT_OF_DATE_KHR) {
++            vkDeviceWaitIdle(s_dev);
++            if (!create_swapchain())
++                s_surface_stale = 1;
++        }
++#else
+         if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
+             vkDeviceWaitIdle(s_dev);
              create_swapchain();
          }
++#endif
      }
 -    if (hud_on()) {
 +    if (hud_on() || nv2a_vk_hud_external) {   /* a port's own counter: always counted */
@@ -638,11 +735,34 @@ index 9c57fc8..7adf50b 100644
      }
      {
          int counted = xbox_ft_frame();
+@@ -7689,6 +8121,8 @@ static void vk_flip(void)
+     frame_begin();
+     VT("flip %u: next frame recording\n", s_frame);
+     s_dyn_valid = 0;
++    if (nv2a_vk_flip_hook)
++        nv2a_vk_flip_hook();                       /* Android: the frame's work to the performance hint */
+     win_events(1);
+ }
+ 
+@@ -7755,6 +8189,13 @@ static void win_events(int at_flip)
+             case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+                 display_hz_update();
+                 break;
++#if defined(__ANDROID__)
++            case SDL_EVENT_DID_ENTER_FOREGROUND:
++                s_surface_stale = 1;               /* a new window surface: make it at the next flip */
++                if (s_fg_handler)
++                    s_fg_handler();
++                break;
++#endif
+             case SDL_EVENT_WINDOW_MOVED:
+             case SDL_EVENT_WINDOW_RESIZED:
+                 wr_record();                       /* the windowed rectangle for the port to save */
 diff --git a/src/nv2a_vk/nv2a_vk.h b/src/nv2a_vk/nv2a_vk.h
-index 881d39a..f82a566 100644
+index 881d39a..59c602c 100644
 --- a/src/nv2a_vk/nv2a_vk.h
 +++ b/src/nv2a_vk/nv2a_vk.h
-@@ -96,6 +96,15 @@ void nv2a_vk_set_gamma_ramp(const uint8_t r[256], const uint8_t g[256], const ui
+@@ -96,6 +96,19 @@ void nv2a_vk_set_gamma_ramp(const uint8_t r[256], const uint8_t g[256], const ui
   * turns FXAA off. */
  enum { NV2A_VK_AA_OFF, NV2A_VK_AA_FXAA, NV2A_VK_AA_SMAA, NV2A_VK_AA_MSAA2, NV2A_VK_AA_MSAA4 };
  void nv2a_vk_set_antialiasing(int mode);
@@ -655,6 +775,10 @@ index 881d39a..f82a566 100644
 + * last half second, 0 while FPS COUNTER is off) and the switch that stops the renderer's own drawing. */
 +void nv2a_vk_frame_stats(float *fps, float *ms);
 +extern volatile int nv2a_vk_hud_external;
++/* Android: fn runs on the window thread each time the app comes back to the foreground */
++void nv2a_vk_set_foreground_handler(void (*fn)(void));
++/* called at the end of every flip, on the renderer's thread */
++extern void (*volatile nv2a_vk_flip_hook)(void);
  /* 0 once an MSAA count failed to allocate this run or the device lacks it --
   * the renderer went back to the count that last worked; the port's menu then
   * takes its setting back too. 1 for every other mode, and before the first

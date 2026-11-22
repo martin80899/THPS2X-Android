@@ -46,6 +46,9 @@
 #include "xbox_memory_layout.h"
 #include "recomp_icall_feedback.h"
 
+extern void perf_android_frame(int report);
+static void perf_flip(void) { perf_android_frame(1); }
+
 #define LOG_TAG "THPS2X"
 
 extern ptrdiff_t g_xbox_mem_offset;
@@ -468,7 +471,9 @@ int host_init(int argc, char **argv, HostOptions *opt)
 
     {
         extern volatile int nv2a_vk_hud_external;  /* the FPS badge is TouchControls.java's */
+        extern void (*volatile nv2a_vk_flip_hook)(void);
         nv2a_vk_hud_external = 1;
+        nv2a_vk_flip_hook = perf_flip;             /* perf_android.c: performance hint, fast cores */
     }
     RECOMP_ICALL_FEEDBACK_INIT();
     install_fault_handler();

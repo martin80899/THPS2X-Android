@@ -49,8 +49,8 @@ public class SettingsMenu extends Dialog {
     static native String nativeOptValue(int i);
     static native void nativeOptStep(int i, int dir);
 
-    private static final int ACCENT = 0xFFFF8A1F, ACCENT_SOFT = 0x33FF8A1F;
-    private static final int CARD = 0xF2121620, RAIL = 0xFF0C0F15, TEXT = 0xFFF2F4F8, MUTED = 0xFF8A93A3;
+    private static final int ACCENT = 0xFF8CC63F, ACCENT_SOFT = 0x338CC63F;
+    private static final int CARD = 0xF20F1510, RAIL = 0xFF0A0F0A, TEXT = 0xFFF2F4F8, MUTED = 0xFF8A93A3;
 
     /** Advanced tests: env.txt lines in THPS2X/data, read when the game starts (host_android.c). */
     private static final String[][] TESTS = {
@@ -343,10 +343,10 @@ public class SettingsMenu extends Dialog {
             tabViews.add(t);
         }
 
-        TextView resume = text("RESUME", 14, 0xFF14100A, true);
+        TextView resume = text("RESUME", 14, 0xFF0B1A06, true);
         resume.setGravity(Gravity.CENTER);
         resume.setLetterSpacing(0.08f);
-        resume.setBackground(pressable(ACCENT, 0xFFFFA65A, dp(12)));
+        resume.setBackground(pressable(ACCENT, 0xFFA8DC5E, dp(12)));
         resume.setPadding(0, dp(11), 0, dp(11));
         resume.setFocusable(true);
         resume.setOnClickListener(v -> dismiss());
@@ -449,7 +449,7 @@ public class SettingsMenu extends Dialog {
         r.setGravity(Gravity.CENTER_VERTICAL);
         r.setPadding(dp(16), dp(11), dp(10), dp(11));
         StateListDrawable bg = new StateListDrawable();
-        GradientDrawable focused = round(0x22FF8A1F, dp(14));
+        GradientDrawable focused = round(0x228CC63F, dp(14));
         focused.setStroke(dp(2), ACCENT);
         bg.addState(new int[] { android.R.attr.state_focused }, focused);
         bg.addState(new int[] { android.R.attr.state_pressed }, round(0x16FFFFFF, dp(14)));
@@ -474,7 +474,7 @@ public class SettingsMenu extends Dialog {
         value.setMaxWidth(dp(260));
         value.setMinWidth(dp(it.changes() ? 128 : 0));
         value.setPadding(dp(12), dp(6), dp(12), dp(6));
-        value.setBackground(round(it.changes() ? 0x1AFF8A1F : 0x10FFFFFF, dp(10)));
+        value.setBackground(round(it.changes() ? 0x1A8CC63F : 0x10FFFFFF, dp(10)));
         if (it.changes()) {
             TextView less = arrow("‹"), more = arrow("›");
             less.setOnClickListener(v -> step(it, -1));
