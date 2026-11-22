@@ -384,6 +384,29 @@ int host_init(int argc, char **argv, HostOptions *opt)
     mkdirs(opt->data_dir);
     snprintf(s_data_dir, sizeof s_data_dir, "%s", opt->data_dir);
     open_log(opt->data_dir);
+    {
+        /* The last run crashed: say so on screen, with the crash lines, so the player need not dig for the log. */
+        char prev[HOST_PATH_MAX], line[512], msg[2048];
+        FILE *f;
+        int n = 0;
+        join(prev, opt->data_dir, "thps2x.previous.log");
+        msg[0] = '\0';
+        if ((f = fopen(prev, "r")) != NULL) {
+            while (fgets(line, sizeof line, f)) {
+                if (!n && strncmp(line, "[CRASH]", 7) != 0) continue;
+                if (n++ >= 5) break;
+                strncat(msg, line, sizeof msg - strlen(msg) - 1);
+            }
+            fclose(f);
+        }
+        if (msg[0]) {
+            char text[2600];
+            snprintf(text, sizeof text,
+                     "THPS 2X crashed last time.\n\n%s\nThe full log is THPS2X/data/thps2x.previous.log - send it "
+                     "with your report.", msg);
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "THPS 2X", text, NULL);
+        }
+    }
     if (chdir(opt->data_dir) != 0)
         fprintf(stderr, "[HOST] cannot enter %s: %s\n", opt->data_dir, strerror(errno));
     printf("[HOST] Android, folder %s\n", root);

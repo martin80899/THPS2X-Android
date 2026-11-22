@@ -67,10 +67,224 @@ index 4767a3a..ad0fb73 100644
   * may drive one control. Without a call the toolkit default is used:
   * arrows d-pad, Z X A S = A B X Y, Q E white/black, 1 3 triggers,
 diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
-index c1d5b44..602a202 100644
+index c1d5b44..05a76eb 100644
 --- a/src/platform/win32_compat.c
 +++ b/src/platform/win32_compat.c
-@@ -799,11 +799,31 @@ DWORD SuspendThread(HANDLE h)
+@@ -329,9 +329,76 @@ DWORD GetCurrentProcessId(void) { return (DWORD)getpid(); }
+ HANDLE GetCurrentThread(void)   { return t_self_obj ? (HANDLE)t_self_obj : PSEUDO_CURRENT_THREAD; }
+ HANDLE GetCurrentProcess(void)  { return PSEUDO_CURRENT_PROCESS; }
+ 
++/* Valid handles: every object obj_alloc made and obj_release has not freed. Windows answers a handle
++ * that is not one (a guest pointer a title hands to the HLE, a stale value) with ERROR_INVALID_HANDLE;
++ * the POSIX layer used to dereference it and fault (THPS 2X on Android: SetEvent on a guest address
++ * in pthread_mutex_lock). w32_lookup gives NULL for such a handle, so every caller's own
++ * "if (!o ...) return FALSE" path answers as Windows does. Open addressing, power-of-two table. */
++static pthread_mutex_t s_reg_lock = PTHREAD_MUTEX_INITIALIZER;
++static uintptr_t *s_reg;
++static size_t s_reg_cap, s_reg_n;
++#define REG_TOMB ((uintptr_t)1)
++
++static size_t reg_hash(uintptr_t p) { return (size_t)((p >> 4) * 0x9E3779B97F4A7C15ull); }
++
++static void reg_put(uintptr_t p);
++static void reg_grow(void)
++{
++    uintptr_t *old = s_reg;
++    size_t cap = s_reg_cap, i;
++    s_reg_cap = cap ? cap * 2 : 4096;
++    s_reg = (uintptr_t *)calloc(s_reg_cap, sizeof(uintptr_t));
++    s_reg_n = 0;
++    for (i = 0; i < cap; i++)
++        if (old[i] > REG_TOMB) reg_put(old[i]);
++    free(old);
++}
++
++static void reg_put(uintptr_t p)
++{
++    size_t m, i;
++    if ((s_reg_n + 1) * 2 > s_reg_cap) reg_grow();
++    m = s_reg_cap - 1;
++    for (i = reg_hash(p) & m; s_reg[i] > REG_TOMB; i = (i + 1) & m) {}
++    s_reg[i] = p;
++    s_reg_n++;
++}
++
++static size_t reg_find(uintptr_t p)   /* slot or (size_t)-1; caller holds the lock */
++{
++    size_t m, i, k;
++    if (!s_reg_cap) return (size_t)-1;
++    m = s_reg_cap - 1;
++    for (i = reg_hash(p) & m, k = 0; s_reg[i] && k < s_reg_cap; i = (i + 1) & m, k++)
++        if (s_reg[i] == p) return i;
++    return (size_t)-1;
++}
++
++static w32_object *w32_lookup(HANDLE h)
++{
++    static int shown;
++    size_t at;
++    if (!h || h == INVALID_HANDLE_VALUE) return NULL;
++    pthread_mutex_lock(&s_reg_lock);
++    at = reg_find((uintptr_t)h);
++    pthread_mutex_unlock(&s_reg_lock);
++    if (at == (size_t)-1) {
++        if (shown < 16) {
++            shown++;
++            fprintf(stderr, "[W32] invalid handle %p used (answered as ERROR_INVALID_HANDLE)\n", h);
++        }
++        SetLastError(ERROR_INVALID_HANDLE);
++        return NULL;
++    }
++    return (w32_object *)h;
++}
++
+ static w32_object *obj_alloc(w32_kind kind)
+ {
+     w32_object *o = (w32_object *)calloc(1, sizeof(w32_object));
++    pthread_mutex_lock(&s_reg_lock);
++    reg_put((uintptr_t)o);
++    pthread_mutex_unlock(&s_reg_lock);
+     o->kind     = kind;
+     o->refcount = 1;
+     pthread_mutex_init(&o->lock, NULL);
+@@ -352,6 +419,12 @@ static void obj_release(w32_object *o)
+     } else if (o->kind == K_WAITABLE_TIMER) {
+         /* Waitable timers: no special cleanup needed */
+     }
++    pthread_mutex_lock(&s_reg_lock);
++    {
++        size_t at = reg_find((uintptr_t)o);
++        if (at != (size_t)-1) { s_reg[at] = REG_TOMB; }
++    }
++    pthread_mutex_unlock(&s_reg_lock);
+     pthread_mutex_destroy(&o->lock);
+     pthread_cond_destroy(&o->cond);
+     pthread_cond_destroy(&o->gate);
+@@ -369,13 +442,13 @@ HANDLE w32_open_handle(int fd, const char *host_path)
+ 
+ int w32_handle_fd(HANDLE h)
+ {
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     return (o && o->kind == K_FILE) ? o->fd : -1;
+ }
+ 
+ const char *w32_handle_path(HANDLE h)
+ {
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     return (o && o->kind == K_FILE) ? o->file_path : NULL;
+ }
+ 
+@@ -384,7 +457,11 @@ BOOL CloseHandle(HANDLE h)
+     if (!h || h == PSEUDO_CURRENT_THREAD || h == PSEUDO_CURRENT_PROCESS ||
+         h == INVALID_HANDLE_VALUE)
+         return TRUE;
+-    obj_release((w32_object *)h);
++    {
++        w32_object *o = w32_lookup(h);
++        if (!o) return FALSE;
++        obj_release(o);
++    }
+     return TRUE;
+ }
+ 
+@@ -396,7 +473,8 @@ BOOL DuplicateHandle(HANDLE srcProc, HANDLE src, HANDLE dstProc, PHANDLE dst,
+     if (src == PSEUDO_CURRENT_THREAD)  src = GetCurrentThread();
+     if (src == PSEUDO_CURRENT_PROCESS) { *dst = src; return TRUE; }
+     if (src == PSEUDO_CURRENT_THREAD || !src) { *dst = src; return TRUE; }
+-    w32_object *o = (w32_object *)src;
++    w32_object *o = w32_lookup(src);
++    if (!o) return FALSE;
+     InterlockedIncrement(&o->refcount);
+     *dst = src;
+     if (options & DUPLICATE_CLOSE_SOURCE)
+@@ -516,7 +594,11 @@ DWORD WaitForSingleObject(HANDLE h, DWORD ms)
+ {
+     if (!h || h == PSEUDO_CURRENT_THREAD || h == PSEUDO_CURRENT_PROCESS)
+         return WAIT_OBJECT_0;
+-    return wait_single((w32_object *)h, ms);
++    {
++        w32_object *o = w32_lookup(h);
++        if (!o) return WAIT_FAILED;
++        return wait_single(o, ms);
++    }
+ }
+ 
+ DWORD WaitForSingleObjectEx(HANDLE h, DWORD ms, BOOL alertable)
+@@ -588,7 +670,7 @@ HANDLE CreateEventW(LPSECURITY_ATTRIBUTES sa, BOOL manualReset, BOOL initialStat
+ 
+ BOOL SetEvent(HANDLE h)
+ {
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     if (!o || o->kind != K_EVENT) return FALSE;
+     pthread_mutex_lock(&o->lock);
+     o->signaled = 1;
+@@ -599,7 +681,7 @@ BOOL SetEvent(HANDLE h)
+ 
+ BOOL ResetEvent(HANDLE h)
+ {
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     if (!o || o->kind != K_EVENT) return FALSE;
+     pthread_mutex_lock(&o->lock);
+     o->signaled = 0;
+@@ -609,7 +691,7 @@ BOOL ResetEvent(HANDLE h)
+ 
+ BOOL PulseEvent(HANDLE h)
+ {
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     if (!o || o->kind != K_EVENT) return FALSE;
+     pthread_mutex_lock(&o->lock);
+     o->signaled = 1;
+@@ -639,7 +721,7 @@ HANDLE CreateSemaphoreW(LPSECURITY_ATTRIBUTES sa, LONG initial, LONG maximum, LP
+ 
+ BOOL ReleaseSemaphore(HANDLE h, LONG releaseCount, PLONG previousCount)
+ {
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     if (!o || o->kind != K_SEM) return FALSE;
+     pthread_mutex_lock(&o->lock);
+     if (previousCount) *previousCount = (LONG)o->sem_count;
+@@ -669,7 +751,7 @@ HANDLE CreateMutexW(LPSECURITY_ATTRIBUTES sa, BOOL initialOwner, LPCWSTR name)
+ 
+ BOOL ReleaseMutex(HANDLE h)
+ {
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     if (!o || o->kind != K_MUTEX) {
+         SetLastError(ERROR_INVALID_HANDLE);
+         return FALSE;
+@@ -766,7 +848,7 @@ VOID ExitThread(DWORD exitCode)
+ 
+ BOOL GetExitCodeThread(HANDLE h, LPDWORD exitCode)
+ {
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     if (!o || o->kind != K_THREAD || !exitCode) return FALSE;
+     pthread_mutex_lock(&o->lock);
+     *exitCode = o->exited ? o->exit_code : STILL_ACTIVE;
+@@ -776,7 +858,7 @@ BOOL GetExitCodeThread(HANDLE h, LPDWORD exitCode)
+ 
+ DWORD ResumeThread(HANDLE h)
+ {
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     if (!o || o->kind != K_THREAD) return (DWORD)-1;
+     pthread_mutex_lock(&o->lock);
+     DWORD prev = (DWORD)o->suspend_count;
+@@ -790,7 +872,7 @@ DWORD SuspendThread(HANDLE h)
+ {
+     /* True mid-run suspension is not supported on POSIX; only the
+      * CREATE_SUSPENDED start gate is. Track the count for ResumeThread. */
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     if (!o || o->kind != K_THREAD) return (DWORD)-1;
+     pthread_mutex_lock(&o->lock);
+     DWORD prev = (DWORD)o->suspend_count;
+@@ -799,11 +881,31 @@ DWORD SuspendThread(HANDLE h)
      return prev;
  }
  
@@ -91,7 +305,8 @@ index c1d5b44..602a202 100644
 +
  BOOL TerminateThread(HANDLE h, DWORD exitCode)
  {
-     w32_object *o = (w32_object *)h;
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
      if (!o || o->kind != K_THREAD) return FALSE;
 +#if defined(__ANDROID__)
 +    pthread_once(&w32_terminate_once, w32_terminate_install);
@@ -102,7 +317,69 @@ index c1d5b44..602a202 100644
      pthread_mutex_lock(&o->lock);
      o->exit_code = exitCode;
      o->exited    = 1;
-@@ -1413,6 +1433,9 @@ VOID SecureZeroMemory(PVOID ptr, SIZE_T cnt)
+@@ -815,14 +917,14 @@ BOOL TerminateThread(HANDLE h, DWORD exitCode)
+ 
+ BOOL SetThreadPriority(HANDLE h, int priority)
+ {
+-    w32_object *o = (h == PSEUDO_CURRENT_THREAD) ? t_self_obj : (w32_object *)h;
++    w32_object *o = (h == PSEUDO_CURRENT_THREAD) ? t_self_obj : w32_lookup(h);
+     if (o && o->kind == K_THREAD) o->priority = priority;
+     return TRUE;   /* real RT priorities need privileges; tracked only */
+ }
+ 
+ int GetThreadPriority(HANDLE h)
+ {
+-    w32_object *o = (h == PSEUDO_CURRENT_THREAD) ? t_self_obj : (w32_object *)h;
++    w32_object *o = (h == PSEUDO_CURRENT_THREAD) ? t_self_obj : w32_lookup(h);
+     return (o && o->kind == K_THREAD) ? o->priority : THREAD_PRIORITY_NORMAL;
+ }
+ 
+@@ -830,7 +932,7 @@ VOID SwitchToThread(void) { sched_yield(); }
+ 
+ DWORD QueueUserAPC(PAPCFUNC func, HANDLE thread, ULONG_PTR data)
+ {
+-    w32_object *o = (thread == PSEUDO_CURRENT_THREAD) ? t_self_obj : (w32_object *)thread;
++    w32_object *o = (thread == PSEUDO_CURRENT_THREAD) ? t_self_obj : w32_lookup(thread);
+     if (!o || o->kind != K_THREAD) return 0;
+     pthread_mutex_lock(&o->lock);
+     DWORD ok = 0;
+@@ -925,7 +1027,7 @@ BOOL CreateTimerQueueTimer(PHANDLE newTimer, HANDLE timerQueue,
+ BOOL ChangeTimerQueueTimer(HANDLE timerQueue, HANDLE timer, ULONG dueTime, ULONG period)
+ {
+     (void)timerQueue;
+-    w32_object *o = (w32_object *)timer;
++    w32_object *o = w32_lookup(timer);
+     if (!o || o->kind != K_TIMER) return FALSE;
+     o->timer_due    = dueTime;
+     o->timer_period = period;
+@@ -935,7 +1037,7 @@ BOOL ChangeTimerQueueTimer(HANDLE timerQueue, HANDLE timer, ULONG dueTime, ULONG
+ BOOL DeleteTimerQueueTimer(HANDLE timerQueue, HANDLE timer, HANDLE completionEvent)
+ {
+     (void)timerQueue;
+-    w32_object *o = (w32_object *)timer;
++    w32_object *o = w32_lookup(timer);
+     if (!o || o->kind != K_TIMER) return FALSE;
+     o->timer_cancel = 1;
+     if (completionEvent) SetEvent(completionEvent);
+@@ -982,7 +1084,7 @@ HANDLE CreateWaitableTimerW(LPSECURITY_ATTRIBUTES sa, BOOL manualReset, LPCWSTR
+ BOOL SetWaitableTimer(HANDLE h, const LARGE_INTEGER *dueTime, LONG period,
+                       PTIMERAPCROUTINE completion, PVOID arg, BOOL resume)
+ {
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     (void)completion; (void)arg; (void)resume;
+     if (!o || o->kind != K_WAITABLE_TIMER || !dueTime) return FALSE;
+     pthread_mutex_lock(&o->lock);
+@@ -1014,7 +1116,7 @@ BOOL SetWaitableTimer(HANDLE h, const LARGE_INTEGER *dueTime, LONG period,
+ 
+ BOOL CancelWaitableTimer(HANDLE h)
+ {
+-    w32_object *o = (w32_object *)h;
++    w32_object *o = w32_lookup(h);
+     if (!o || o->kind != K_WAITABLE_TIMER) return FALSE;
+     pthread_mutex_lock(&o->lock);
+     o->waitable_triggered = 0;
+@@ -1413,6 +1515,9 @@ VOID SecureZeroMemory(PVOID ptr, SIZE_T cnt)
  {
  #if defined(__APPLE__)
      memset_s(ptr, cnt, 0, cnt);
@@ -112,3 +389,12 @@ index c1d5b44..602a202 100644
  #else
      explicit_bzero(ptr, cnt);
  #endif
+@@ -1742,7 +1847,7 @@ HANDLE CreateFileMappingW(HANDLE file, LPSECURITY_ATTRIBUTES sa, DWORD protect,
+ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow,
+                        SIZE_T count, LPVOID baseAddr)
+ {
+-    w32_object *o = (w32_object *)mapping;
++    w32_object *o = w32_lookup(mapping);
+     if (!o || o->kind != K_FILEMAP) { SetLastError(ERROR_INVALID_HANDLE); return NULL; }
+ 
+     off_t  off = ((off_t)offHigh << 32) | offLow;
