@@ -18,6 +18,7 @@
  * handler to forward the fault; an armed page is noted and the store retried.
  * Anything else is a crash: logged with the guest registers, then the default action.
  */
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -354,6 +355,29 @@ int host_init(int argc, char **argv, HostOptions *opt)
         i++;
     }
     if (getenv("THPS2X_MAX_SECONDS")) opt->max_seconds = atof(getenv("THPS2X_MAX_SECONDS"));
+
+    /* game/ without default.xbe: a folder of the THPS2X folder that has one (the Xbox ISO Extractor app
+     * puts the disc into a folder named after the image) is taken as the game folder. */
+    {
+        char probe[HOST_PATH_MAX];
+        struct stat st;
+        join(probe, opt->game_dir, "default.xbe");
+        if (stat(probe, &st) != 0) {
+            DIR *d = opendir(root);
+            struct dirent *de;
+            while (d && (de = readdir(d)) != NULL) {
+                char sub[HOST_PATH_MAX];
+                if (de->d_name[0] == '.') continue;
+                join(sub, root, de->d_name);
+                join(probe, sub, "default.xbe");
+                if (stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
+                    snprintf(opt->game_dir, HOST_PATH_MAX, "%s", sub);
+                    break;
+                }
+            }
+            if (d) closedir(d);
+        }
+    }
 
     mkdirs(opt->game_dir);
     mkdirs(opt->save_dir);
