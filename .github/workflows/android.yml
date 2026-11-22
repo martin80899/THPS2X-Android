@@ -9,6 +9,9 @@ on:
     paths: [ 'android/**', '.github/workflows/android.yml' ]
   workflow_dispatch:
 
+permissions:
+  contents: write   # the shell APK is also kept on the shell-apk branch (git can fetch it where artifact storage is out of reach)
+
 jobs:
   shell:
     runs-on: ubuntu-latest
@@ -18,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -56,3 +59,13 @@ jobs:
         with:
           name: thps2x-android-shell
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Keep the shell APK on the shell-apk branch (one commit, replaced every build)
+        run: |
+          mkdir "$RUNNER_TEMP/shell" && cd "$RUNNER_TEMP/shell"
+          cp "$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk" thps2x-android-shell.apk
+          printf 'Shell APK of %s (SDL3 %s, no game code). Add libmain.so with tools/android_pack.py.\n' "$GITHUB_SHA" "$SDL_TAG" > README.md
+          git init -q -b shell-apk
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com add -A
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -q -m "shell APK for $GITHUB_SHA"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" shell-apk
