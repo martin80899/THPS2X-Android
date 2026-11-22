@@ -1,0 +1,71 @@
+# opt_soundtracks.txt - GENERAL OPTIONS -> SOUNDTRACKS (maintainer, 2026-11-05: one sub-menu, the second value of
+# GENERAL OPTIONS after CAREER MODE): SOUNDTRACK value line (left/right through GAME MUSIC, ALL CUSTOM SOUNDTRACKS,
+# COMBINED and the albums of media\, wrapping; A = one on), a greyed blank, the PLAYBACK MODE heading (normal text,
+# the cursor skips it both ways), PLAY IN ORDER / SHUFFLE (A picks, ON marks the one in use); B back to GENERAL
+# OPTIONS on SOUNDTRACKS.
+# Needs a layout with media\ albums (throw-away copy); checks saves\settings.ini afterwards: soundtrack_mode=shuffle,
+# soundtrack_album = the choice after the steps below (from game: right x3 = the first album, left x1 = COMBINED,
+# A = the first album again ... see the shots).
+#   THPS2X.exe --max-seconds 85 --input-script tests\input\opt_soundtracks.txt   (RECOMP_NULL_GUARD=log)
+# Times count from the first pad read (about 1 s after start); 300 ms presses (see menu_tour.txt).
+
+0:p2-connect
+
+# movies (ATVISION, TREYARCH, NEVRSOFT, intro) and the title screen
+3000:start:200
+6000:start:200
+9000:start:200
+12000:start:200
+15000:start:200
+
+# main menu: OPTIONS is the seventh entry
+21000:down:300
+22000:down:300
+23000:down:300
+24000:down:300
+25000:down:300
+26000:down:300
+28000:a:300
+# OPTIONS: GENERAL OPTIONS is the 9th line
+33000:down:300
+34000:down:300
+35000:down:300
+36000:down:300
+37000:down:300
+38000:down:300
+39000:down:300
+40000:down:300
+41000:shot=01_options_general_line
+42000:a:300
+# GENERAL OPTIONS opens on CAREER MODE: one down to SOUNDTRACKS
+46000:down:300
+47000:shot=02_general_soundtracks_line
+48000:a:300
+# SOUNDTRACKS opens on SOUNDTRACK (the saved source)
+52000:shot=03_soundtracks_open
+53000:right:300
+54500:shot=04_source_next
+55000:right:300
+56500:shot=05_source_next2
+57000:right:300
+58500:shot=06_source_next3
+59000:left:300
+60500:shot=07_source_back1
+# down: the blank and the heading are greyed, the cursor lands on PLAY IN ORDER, then SHUFFLE
+61000:down:300
+62500:shot=08_cursor_order
+63000:down:300
+64000:a:300
+65500:shot=09_shuffle_on
+# up, up: PLAY IN ORDER, then over the heading and the blank to SOUNDTRACK; down, down: back to SHUFFLE
+65800:up:200
+66500:up:200
+67200:shot=09b_up_skips_heading
+67600:down:200
+68300:down:200
+69000:shot=09c_down_skips_heading
+# B: GENERAL OPTIONS, the cursor on SOUNDTRACKS; A again: the values kept
+69800:b:300
+72800:shot=10_back_general
+73800:a:300
+77800:shot=11_soundtracks_again

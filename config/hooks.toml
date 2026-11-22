@@ -1,0 +1,258 @@
+# THPS 2X instruction hooks (toolkit tools/recomp/hooks_config.py, design after
+# XboxXBE-Recomp's [[hook]], MIT). Read by tools\lift.ps1 (--hooks); a change
+# here needs a re-lift. Each hook is a C function in src/ (recomp_manual.c):
+# void name(void), or int name(void) with on_true / on_false.
+#
+# [[hook]]
+# at = 0x0012ABCD        # guest instruction inside a recompiled function
+# call = "thps_fix"      # the C function
+# after = false          # true: after the instruction (not after a jump or ret)
+# on_true = "ret"        # returned nonzero: return as the function's ret does
+# on_false = 0x0012AC00  # returned zero: go to that instruction of the function
+#
+# The hook sees the guest registers (g_eax ... g_esp) and memory, not the flags
+# the lifter keeps lazily: place it where no flag is live.
+
+# Self-test of the mechanism (M3.5 step 3): counts the main-menu Multiplayer
+# check (0x001238B0, first instruction). RECOMP_HOOK_TRACE=1 logs the count.
+[[hook]]
+at = 0x001238B0
+call = "thps_hook_mp_check"
+
+# D3D 3947 write-combine flush acknowledge (M3.5): CDevice_KickOff (0x00019E90)
+# and its sibling 0x00019DC0 set bit 16 of NV2A 0x00100410 and spin until the
+# GPU clears it. Clearing it right before the test -- recomp_spin_wake(), the
+# runtime's flush acknowledge -- ends the spin at once, instead of waiting for
+# a register thread to poll it (with those threads no longer spinning, boot
+# took minutes: thousands of kickoffs).
+[[hook]]
+at = 0x00019DE0
+call = "recomp_spin_wake"
+
+[[hook]]
+at = 0x00019ED0
+call = "recomp_spin_wake"
+
+# Movie loop pacing (M5 hardening, point 6). The Bink loop sub_001B05E0 asks
+# BinkWait (sub_001C00A0) whether the next frame is due; while it is not it
+# polls the pads (0x001B0E70) and asks again -- a spin, ~236,000 polls a
+# second on one core. 0x001B073F is the pad-poll call every pass of the loop
+# goes through (after a decoded frame and on the "not due" path); the hook
+# lets at most one pass per guest vblank through and sleeps until the next
+# vblank otherwise, so the pads are still read every vblank and a skip press
+# is seen within 16.7 ms, as before.
+[[hook]]
+at = 0x001B073F
+call = "thps_movie_wait"
+
+# Watch Replay tick field (2026-10-17): the recorder stores the vblanks per
+# frame as dt - 2 in 2 bits and playback holds each frame that long (2..5
+# vblanks, made for 30 fps); at 60 fps dt = 1 overflowed and replays ran at
+# ~11 fps. Both ends move the bias to 1 (1..4 vblanks). recomp_manual.c says
+# more. The flags of both adds are dead: a cmp / add follows.
+[[hook]]
+at = 0x000D2582
+call = "thps_replay_tick_rec"
+after = true
+
+[[hook]]
+at = 0x000D65C5
+call = "thps_replay_tick_play"
+after = true
+
+# Options menu (M6 groundwork, recomp_manual.c): 0x0013D323 pushes the number
+# of lines the Options menu navigates (12); the hook sets it for the rewritten
+# list (10 main, 4 CONTROLS). push: no flags involved.
+[[hook]]
+at = 0x0013D323
+call = "thps_opt_line_count"
+after = true
+
+# PHYSICS ORIGINAL THPS 2 (maintainer, 2026-11-05; recomp_manual.c "PHYSICS"):
+# after each instruction that makes the gravity G (12000, 12500 in Construction
+# Site) the hook sets the PS1's 13000; after the flat-ollie numerators the PS1's.
+# The flags of every add / imul below are dead (the next flag user is a cdq,
+# imul, cmp or a later test that sets them again).
+[[hook]]
+at = 0x000B266A
+call = "thps_grav_air_imul"
+after = true
+
+[[hook]]
+at = 0x000B26AB
+call = "thps_grav_edx"
+after = true
+
+[[hook]]
+at = 0x000AB20E
+call = "thps_grav_eax"
+after = true
+
+[[hook]]
+at = 0x000AC154
+call = "thps_grav_eax"
+after = true
+
+[[hook]]
+at = 0x000B374E
+call = "thps_grav_eax"
+after = true
+
+[[hook]]
+at = 0x000B45FF
+call = "thps_grav_eax"
+after = true
+
+[[hook]]
+at = 0x000A9319
+call = "thps_grav_edx"
+after = true
+
+[[hook]]
+at = 0x000B5305
+call = "thps_grav_edx"
+after = true
+
+[[hook]]
+at = 0x000AE00E
+call = "thps_grav_eax"
+after = true
+
+[[hook]]
+at = 0x000A5684
+call = "thps_grav_edx"
+after = true
+
+[[hook]]
+at = 0x000ABDFA
+call = "thps_grav_ecx"
+after = true
+
+[[hook]]
+at = 0x000AC5B7
+call = "thps_grav_ecx"
+after = true
+
+[[hook]]
+at = 0x000B42B0
+call = "thps_grav_ecx"
+after = true
+
+[[hook]]
+at = 0x000B0451
+call = "thps_grav_eax"
+after = true
+
+[[hook]]
+at = 0x000AF5BD
+call = "thps_ollie_max"
+after = true
+
+[[hook]]
+at = 0x000AF5E7
+call = "thps_ollie_min"
+after = true
+
+[[hook]]
+at = 0x000AF633
+call = "thps_ollie_max"
+after = true
+
+[[hook]]
+at = 0x000ADE18
+call = "thps_ollie_max"
+after = true
+
+[[hook]]
+at = 0x000ADE42
+call = "thps_ollie_min"
+after = true
+
+[[hook]]
+at = 0x000ADE8E
+call = "thps_ollie_max"
+after = true
+
+# Save overwrite from OPTIONS -> MEMORY UNIT -> SAVE GAME (maintainer, 2026-11-07;
+# a bug of the original too, checked on xemu): the save step sub_00110560
+# branches on the screen's mode at 0x00110735 (eax = [screen+0x15E24]: 1 new,
+# 3 overwrite). From the options menu the screen is built in mode 1 even when
+# the player picked an existing save and confirmed the game's own "Are you sure
+# you want to overwrite this save game?", so keeping the name ended in "A file
+# named [%s] already exists". See thps_save_overwrite_mode in recomp_manual.c.
+[[hook]]
+at = 0x00110735
+call = "thps_save_overwrite_mode"
+
+# Ollie charge at 120 fps (maintainer, 2026-11-07): HandleJump sub_000AEA90
+# counts the charge (skater+0x5694, 0x000AEFBC) only when the 60 Hz vblank
+# counter byte [0x30697C] is odd (test at 0x000AEFB3, je 0x000AEFC2). At 120
+# fps two game frames see the same odd value, so the charge filled twice as
+# fast. The hook replaces the test: nonzero = count, zero = skip. See
+# thps_ollie_charge_tick in recomp_manual.c.
+[[hook]]
+at = 0x000AEFB3
+call = "thps_ollie_charge_tick"
+on_true = 0x000AEFBC
+on_false = 0x000AEFC2
+
+# Traffic cars at 120 fps (Discord report, 2026-11-14): CCar::AI sub_00072B60
+# brakes the car's velocity by 1/16 per game frame in the last 1/16 of a road
+# segment (block 0x00072E24 .. 0x00072E5E), not per level step - at 120 fps the
+# taxis crawled through the corners. Nonzero = the block was done per step in
+# C (not at 60 fps), zero = the game's block runs. See thps_car_brake in
+# recomp_manual.c.
+[[hook]]
+at = 0x00072E24
+call = "thps_car_brake"
+on_true = 0x00072E5E
+
+# Loop bail at 120 fps (Discord report, 2026-11-14): upside down, the skater
+# bails when skater+0x59FC (game frames since the rotation changed) is above
+# 6 - at 120 fps a loop polygon takes twice as many frames. The hook counts in
+# 60 Hz frames: nonzero = no bail (0x000B1D3A), zero = the game's bail block.
+# See thps_loop_bail in recomp_manual.c.
+[[hook]]
+at = 0x000B1C30
+call = "thps_loop_bail"
+on_true = 0x000B1D3A
+
+# Object script waits at 120 fps (Discord report, 2026-11-14): C_WAIT counts
+# object+0x1DC down by 1 per game frame; the ambient sound loops (play, wait,
+# goto) ran twice as fast. The hooks count it in 60 Hz frames of the step
+# clock: nonzero = done (after the decrement), zero = the game's decrement.
+# The object is edi at the first, sub_000B76D0's this at the second. See
+# thps_script_wait in recomp_manual.c.
+[[hook]]
+at = 0x0006AA14
+call = "thps_script_wait_edi"
+on_true = 0x0006AA34
+
+[[hook]]
+at = 0x000B77A1
+call = "thps_script_wait_this"
+on_true = 0x000B77B8
+
+# Rail bends (GitHub #21, v1.2.8): both on-rail routines test a segment's end
+# with the full Speed (one PS1 30 fps step) but move by Speed x [0x300850] >> 8
+# (half of it at 60 fps), so every node of a multi-segment rail gave a jump.
+# At "add edi, ecx" (no flag live before it) the step becomes the real
+# distance; at the move of a pass after a node only the rest is moved
+# (on_true: after the game's move). See thps_rail_step in recomp_manual.c.
+[[hook]]
+at = 0x000A971B
+call = "thps_rail_step"
+
+[[hook]]
+at = 0x000A9A28
+call = "thps_rail_move"
+on_true = 0x000A9AAE
+
+[[hook]]
+at = 0x000B56FD
+call = "thps_rail_step"
+
+[[hook]]
+at = 0x000B5A04
+call = "thps_rail_move"
+on_true = 0x000B5A8A
