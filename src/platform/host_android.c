@@ -326,6 +326,9 @@ int host_init(int argc, char **argv, HostOptions *opt)
     int i;
 
     memset(opt, 0, sizeof(*opt));
+    /* Landscape only: SDL lets a resizable window follow the phone into portrait, which squeezes the
+     * picture and stretches the on-screen pad. Before any window is made. */
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     if (root_env && *root_env) {
         snprintf(root, sizeof root, "%s", root_env);
     } else {
