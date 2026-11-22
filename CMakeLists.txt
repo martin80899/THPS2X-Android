@@ -10,6 +10,12 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX)
+if(ANDROID)
+    # The lifted code and the runtime were written against x86: plain char is signed there (it is unsigned
+    # on arm64), and an x86-64 build never fuses a*b+c into one FMA (clang does on arm64, rounding
+    # differently). Both made the same, so the game computes what it computes on the PC and the Xbox.
+    add_compile_options(-fsigned-char -ffp-contract=off)
+endif()
 if(MINGW)
     add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00)
 endif()

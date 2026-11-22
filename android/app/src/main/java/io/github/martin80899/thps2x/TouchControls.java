@@ -13,8 +13,16 @@ import android.os.Looper;
 import android.util.SparseArray;
 import android.view.InputDevice;
 import android.view.MotionEvent;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
 import android.view.View;
+import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -27,6 +35,18 @@ import android.widget.TextView;
 public class TouchControls extends View implements InputManager.InputDeviceListener {
     static native void nativeState(int buttons, float lx, float ly, float rx, float ry);
     static native void nativeOff();
+    static native int nativeGetFps();
+    static native void nativeSetFps(int mode);
+    static native String nativeDataDir();
+
+    /** Graphics tests: env.txt lines in THPS2X/data, read when the game starts (host_android.c). */
+    private static final String[][] TESTS = {
+        { "THPS2X_ONE_CORE=1", "Test: game on one CPU core" },
+        { "RECOMP_VK_INSTANCE=0", "Test: instancing off" },
+        { "RECOMP_VK_NO_DYN_VERTEX_INPUT=1", "Test: dynamic vertex input off" },
+        { "RECOMP_PAGE_TRACK=0", "Test: page tracking off" },
+    };
+    private static final String[] FPS_NAMES = { "OFF", "FPS", "FPS + FRAME TIME", "FRAME TIME" };
 
     // Button bits: keep in step with touch_android.c
     static final int A = 1, B = 1 << 1, X = 1 << 2, Y = 1 << 3, BLACK = 1 << 4, WHITE = 1 << 5,
@@ -173,14 +193,77 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
         });
         box.addView(op);
 
+        // FPS counter: the game's own setting, at once
+        final Button fps = new Button(ctx);
+        fps.setAllCaps(false);
+        final int[] fpsMode = { 0 };
+        try { fpsMode[0] = nativeGetFps(); } catch (Throwable ignored) { }
+        fps.setText("FPS counter: " + FPS_NAMES[fpsMode[0] & 3]);
+        fps.setOnClickListener(v -> {
+            fpsMode[0] = (fpsMode[0] + 1) & 3;
+            fps.setText("FPS counter: " + FPS_NAMES[fpsMode[0]]);
+            try { nativeSetFps(fpsMode[0]); } catch (Throwable ignored) { }
+        });
+        box.addView(fps);
+
+        // Graphics tests: env.txt switches, after the game is opened again
+        TextView tests = new TextView(ctx);
+        tests.setText("\nGraphics tests (close the game and open it again to apply):");
+        box.addView(tests);
+        final File env = envFile();
+        final List<String> on = readEnv(env);
+        for (String[] t : TESTS) {
+            Switch sw = new Switch(ctx);
+            sw.setText(t[1]);
+            sw.setChecked(on.contains(t[0]));
+            sw.setOnCheckedChangeListener((v, c) -> {
+                if (c) { if (!on.contains(t[0])) on.add(t[0]); } else on.remove(t[0]);
+                writeEnv(env, on);
+            });
+            box.addView(sw);
+        }
+
+        ScrollView scroll = new ScrollView(ctx);
+        scroll.addView(box);
         new AlertDialog.Builder(ctx, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle("Touch controls")
-            .setView(box)
+            .setView(scroll)
             .setPositiveButton("Done", null)
+            .setNegativeButton("Close game", (d, w) -> {
+                if (getContext() instanceof android.app.Activity) ((android.app.Activity) getContext()).finishAffinity();
+                System.exit(0);
+            })
             .setNeutralButton("Reset", (d, w) -> {
                 scale = 1f; opacity = 1f; shown = true; save(); layout(getWidth(), getHeight()); invalidate();
             })
             .show();
+    }
+
+    private static File envFile() {
+        String dir = null;
+        try { dir = nativeDataDir(); } catch (Throwable ignored) { }
+        if (dir == null || dir.isEmpty()) dir = "/storage/emulated/0/THPS2X/data";
+        return new File(dir, "env.txt");
+    }
+
+    private static List<String> readEnv(File f) {
+        List<String> out = new ArrayList<>();
+        try {
+            for (String l : Files.readAllLines(f.toPath(), StandardCharsets.UTF_8)) {
+                l = l.trim();
+                if (!l.isEmpty() && !l.startsWith("#")) out.add(l);
+            }
+        } catch (Exception ignored) { }
+        return out;
+    }
+
+    private static void writeEnv(File f, List<String> lines) {
+        try {
+            if (lines.isEmpty()) { f.delete(); return; }
+            StringBuilder b = new StringBuilder("# THPS 2X test switches (touch menu -> graphics tests)\n");
+            for (String l : lines) b.append(l).append('\n');
+            try (FileOutputStream o = new FileOutputStream(f)) { o.write(b.toString().getBytes(StandardCharsets.UTF_8)); }
+        } catch (Exception ignored) { }
     }
 
     private void save() {

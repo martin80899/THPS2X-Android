@@ -18,6 +18,7 @@
  * handler to forward the fault; an armed page is noted and the store retried.
  * Anything else is a crash: logged with the guest registers, then the default action.
  */
+#define _GNU_SOURCE 1      /* sched_setaffinity, cpu_set_t */
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -33,6 +34,7 @@
 #include <ucontext.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sched.h>
 #include <dlfcn.h>
 #include <jni.h>
 #include <android/log.h>
@@ -50,6 +52,7 @@ extern ptrdiff_t g_xbox_mem_offset;
 extern RECOMP_TLS uint32_t g_eax, g_ecx, g_edx, g_ebx, g_esi, g_edi, g_esp;
 
 static char s_data_dir[HOST_PATH_MAX];
+const char *host_android_data_dir(void) { return s_data_dir; }   /* touch_android.c: the test switches file */
 
 /* ── small helpers ─────────────────────────────────────────────── */
 
@@ -430,6 +433,31 @@ int host_init(int argc, char **argv, HostOptions *opt)
                 printf("[HOST] env.txt: %s=%s\n", line, eq + 1);
             }
             fclose(f);
+        }
+    }
+
+    /* THPS2X_ONE_CORE=1 (a graphics test in the touch menu): this thread and every thread made after it --
+     * the game's and the renderer's -- on the phone's fastest core only. One core sees every store in
+     * program order, so a problem that goes away here is a memory-order race between the game and the
+     * renderer, and one that stays is not. */
+    if (getenv("THPS2X_ONE_CORE") && *getenv("THPS2X_ONE_CORE") == '1') {
+        int cpu, best = -1;
+        long cap, best_cap = -1;
+        for (cpu = 0; cpu < 16; cpu++) {
+            char p[96];
+            FILE *f;
+            snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%d/cpu_capacity", cpu);
+            if (!(f = fopen(p, "r"))) continue;
+            if (fscanf(f, "%ld", &cap) == 1 && cap > best_cap) { best_cap = cap; best = cpu; }
+            fclose(f);
+        }
+        if (best < 0) best = 7;
+        {
+            cpu_set_t set;
+            CPU_ZERO(&set);
+            CPU_SET(best, &set);
+            printf("[HOST] one core: cpu %d (capacity %ld): %s\n", best, best_cap,
+                   sched_setaffinity(0, sizeof set, &set) == 0 ? "on" : strerror(errno));
         }
     }
 

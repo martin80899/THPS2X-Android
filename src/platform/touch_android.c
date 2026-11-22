@@ -7,6 +7,10 @@
 #include <jni.h>
 #include <string.h>
 #include "xinput_xbox.h"
+#include "settings.h"
+#include "nv2a_vk.h"
+
+extern const char *host_android_data_dir(void);
 
 /* Button bits of TouchControls.java (keep in step) */
 enum {
@@ -53,4 +57,33 @@ Java_io_github_martin80899_thps2x_TouchControls_nativeOff(JNIEnv *env, jclass cl
 {
     (void)env; (void)cls;
     xbox_InputTouchState(NULL);
+}
+
+/* The touch menu's FPS COUNTER line: the game's own setting (RECOMP OPTIONS -> FRAME RATE -> FPS COUNTER),
+ * 0 off, 1 fps, 2 fps and frame time, 3 frame time. */
+JNIEXPORT jint JNICALL
+Java_io_github_martin80899_thps2x_TouchControls_nativeGetFps(JNIEnv *env, jclass cls)
+{
+    const char *v = settings_get("fps_counter", "off");
+    (void)env; (void)cls;
+    return !strcmp(v, "fps") ? 1 : !strcmp(v, "fps_frametime") ? 2 : !strcmp(v, "frametime") ? 3 : 0;
+}
+
+JNIEXPORT void JNICALL
+Java_io_github_martin80899_thps2x_TouchControls_nativeSetFps(JNIEnv *env, jclass cls, jint mode)
+{
+    static const char *const val[4] = { "off", "fps", "fps_frametime", "frametime" };
+    static const int hud[4] = { NV2A_VK_HUD_OFF, NV2A_VK_HUD_FPS, NV2A_VK_HUD_BOTH, NV2A_VK_HUD_MS };
+    (void)env; (void)cls;
+    if (mode < 0 || mode > 3) mode = 0;
+    settings_set("fps_counter", val[mode]);
+    nv2a_vk_set_fps_hud(hud[mode]);
+}
+
+/* Where data/env.txt lives (the touch menu's graphics tests write it; host_android.c reads it at start). */
+JNIEXPORT jstring JNICALL
+Java_io_github_martin80899_thps2x_TouchControls_nativeDataDir(JNIEnv *env, jclass cls)
+{
+    (void)cls;
+    return (*env)->NewStringUTF(env, host_android_data_dir());
 }
