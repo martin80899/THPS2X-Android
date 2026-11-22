@@ -330,8 +330,8 @@ int main(int argc, char **argv)
              * not held up (the first start with the stock pack writes ~72 MB). */
             extern char g_thps_media_dir[512];
             char ms[600], ds[600];
-            snprintf(ms, sizeof ms, "%s\\shaders", g_thps_media_dir);
-            snprintf(ds, sizeof ds, "%s\\shaders", opt.data_dir);
+            snprintf(ms, sizeof ms, "%s/shaders", g_thps_media_dir);
+            snprintf(ds, sizeof ds, "%s/shaders", opt.data_dir);
             shader_pack_start(ms, ds);
         }
 #endif

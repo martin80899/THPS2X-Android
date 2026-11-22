@@ -1,0 +1,114 @@
+diff --git a/src/input/xinput_device.c b/src/input/xinput_device.c
+index 4179647..7465efd 100644
+--- a/src/input/xinput_device.c
++++ b/src/input/xinput_device.c
+@@ -287,6 +287,38 @@ static void keyboard_state(XBOX_INPUT_STATE *pState)
+  * Merging is also the better rule. A real pad keeps working -- its
+  * buttons are already in pState and the keyboard only adds to them --
+  * and there is no special case left to get wrong. */
++#include <SDL3/SDL_atomic.h>   /* SDL_SpinLock: the touch pad state (any thread) */
++
++static XBOX_GAMEPAD s_touch;
++static int          s_touch_on;
++static SDL_SpinLock s_touch_lock;
++
++void xbox_InputTouchState(const XBOX_GAMEPAD *g)
++{
++    SDL_LockSpinlock(&s_touch_lock);
++    if (g) s_touch = *g;
++    s_touch_on = g != NULL;
++    SDL_UnlockSpinlock(&s_touch_lock);
++}
++
++static void touch_merge(XBOX_INPUT_STATE *pState)
++{
++    XBOX_GAMEPAD t;
++    int i, on;
++    SDL_LockSpinlock(&s_touch_lock);
++    t = s_touch; on = s_touch_on;
++    SDL_UnlockSpinlock(&s_touch_lock);
++    if (!on) return;
++    pState->Gamepad.wButtons |= t.wButtons;
++    for (i = 0; i < 8; i++)
++        if (t.bAnalogButtons[i] > pState->Gamepad.bAnalogButtons[i])
++            pState->Gamepad.bAnalogButtons[i] = t.bAnalogButtons[i];
++    if (t.sThumbLX) pState->Gamepad.sThumbLX = t.sThumbLX;
++    if (t.sThumbLY) pState->Gamepad.sThumbLY = t.sThumbLY;
++    if (t.sThumbRX) pState->Gamepad.sThumbRX = t.sThumbRX;
++    if (t.sThumbRY) pState->Gamepad.sThumbRY = t.sThumbRY;
++}
++
+ static void keyboard_merge(XBOX_INPUT_STATE *pState)
+ {
+     XBOX_INPUT_STATE kb;
+@@ -574,6 +606,8 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+     unlock();
+     if (keyboard_enabled() && (int)dwPort == (g_kbd_port >= 0 ? g_kbd_port : 0))
+         keyboard_merge(pState);
++    if (dwPort == 0)
++        touch_merge(pState);
+     xbox_InputScriptApply((int)dwPort, &pState->Gamepad);
+     if (s_bind_suppress)   /* a press being recorded (rebinding menu) */
+         memset(&pState->Gamepad, 0, sizeof pState->Gamepad);
+diff --git a/src/input/xinput_xbox.h b/src/input/xinput_xbox.h
+index 4767a3a..ad0fb73 100644
+--- a/src/input/xinput_xbox.h
++++ b/src/input/xinput_xbox.h
+@@ -168,6 +168,11 @@ void xbox_InputKeyEvent(int scancode, int down);
+ /* Release every key (the window lost the focus: no key-up will arrive). */
+ void xbox_InputKeyReleaseAll(void);
+ 
++/* A touch screen's on-screen pad (Android: the port's overlay): its whole state, merged on top of
++ * port 0 like the keyboard, analog sticks and triggers included. NULL = no touch pad (nothing merged).
++ * Any thread; the last state stays until the next call. */
++void xbox_InputTouchState(const XBOX_GAMEPAD *g);
++
+ /* Replace the keymap (copied; at most XBOX_KEYMAP_MAX entries). Several keys
+  * may drive one control. Without a call the toolkit default is used:
+  * arrows d-pad, Z X A S = A B X Y, Q E white/black, 1 3 triggers,
+diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
+index c1d5b44..602a202 100644
+--- a/src/platform/win32_compat.c
++++ b/src/platform/win32_compat.c
+@@ -799,11 +799,31 @@ DWORD SuspendThread(HANDLE h)
+     return prev;
+ }
+ 
++#if defined(__ANDROID__)
++/* Bionic has no pthread_cancel: the thread to end gets SIGUSR2, whose handler leaves it with
++ * pthread_exit -- the same asynchronous end pthread_cancel gives (no cleanup of guest locks either). */
++static void w32_terminate_handler(int sig) { (void)sig; pthread_exit(NULL); }
++static pthread_once_t w32_terminate_once = PTHREAD_ONCE_INIT;
++static void w32_terminate_install(void)
++{
++    struct sigaction sa;
++    memset(&sa, 0, sizeof(sa));
++    sa.sa_handler = w32_terminate_handler;
++    sigemptyset(&sa.sa_mask);
++    sigaction(SIGUSR2, &sa, NULL);
++}
++#endif
++
+ BOOL TerminateThread(HANDLE h, DWORD exitCode)
+ {
+     w32_object *o = (w32_object *)h;
+     if (!o || o->kind != K_THREAD) return FALSE;
++#if defined(__ANDROID__)
++    pthread_once(&w32_terminate_once, w32_terminate_install);
++    pthread_kill(o->thread, SIGUSR2);
++#else
+     pthread_cancel(o->thread);
++#endif
+     pthread_mutex_lock(&o->lock);
+     o->exit_code = exitCode;
+     o->exited    = 1;
+@@ -1413,6 +1433,9 @@ VOID SecureZeroMemory(PVOID ptr, SIZE_T cnt)
+ {
+ #if defined(__APPLE__)
+     memset_s(ptr, cnt, 0, cnt);
++#elif defined(__ANDROID__)
++    volatile unsigned char *p = (volatile unsigned char *)ptr;   /* bionic has no explicit_bzero */
++    while (cnt--) *p++ = 0;
+ #else
+     explicit_bzero(ptr, cnt);
+ #endif

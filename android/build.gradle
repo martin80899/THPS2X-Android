@@ -1,0 +1,8 @@
+// THPS 2X Android shell: SDL3's Java side and the native libraries put in app/libs/arm64-v8a by the CI
+// workflow (.github/workflows/android.yml). The game itself (libmain.so) is built from the player's own
+// default.xbe and added afterwards (tools/android_pack.py): no game code is in this repository or its builds.
+buildscript {
+    repositories { google(); mavenCentral() }
+    dependencies { classpath 'com.android.tools.build:gradle:8.7.3' }
+}
+allprojects { repositories { google(); mavenCentral() } }

@@ -61,17 +61,25 @@ if(NOT RECOMP_GEN_SOURCES)
     message(FATAL_ERROR "No generated C in ${RECOMP_GEN_DIR} - run tools/lift.ps1 first")
 endif()
 
-add_executable(${PROJECT_NAME}
+set(THPS_GAME_SOURCES
     src/main.c
     src/recomp_manual.c
     src/input.c
     src/settings.c
     src/soundtracks.c
     src/vk_check.c
-    src/platform/host_win32.c
     ${RECOMP_GEN_SOURCES}
 )
-set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME THPS2X)
+if(ANDROID)
+    # Android (arm64): the game is libmain.so, which SDL3's SDLActivity loads and whose SDL_main it
+    # calls (main.c's main, renamed). Platform layer: src/platform/host_android.c.
+    add_library(${PROJECT_NAME} SHARED ${THPS_GAME_SOURCES} src/platform/host_android.c src/platform/touch_android.c)
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME main)
+    set_source_files_properties(src/main.c PROPERTIES COMPILE_DEFINITIONS "main=SDL_main")
+else()
+    add_executable(${PROJECT_NAME} ${THPS_GAME_SOURCES} src/platform/host_win32.c)
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME THPS2X)
+endif()
 # The port's icon (assets/README.md): the exe's icon in Explorer as a resource; the window / taskbar icon as the
 # BMP's bytes in a generated header (main.c -> xbox_set_window_icon).
 if(WIN32)
@@ -136,6 +144,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${XBOXRECOMP_DIR}/include
 )
 
+if(ANDROID)
+    find_package(SDL3 REQUIRED CONFIG)
+    target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3 log android dl m)
+else()
 # System libraries the toolkit's Windows runtime still needs. No D3D: the
 # renderer is Vulkan (M2 stage 5 removed d3d11/dxgi/dxguid).
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -144,6 +156,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     dbghelp   # crash handler: host RIP -> generated sub_XXXXXXXX
     shell32   # CommandLineToArgvW: the command line as UTF-16
 )
+endif()
 
 if(MINGW)
     # CodeView + .pdb (llvm-mingw/lld) so dbghelp in the crash handler can
@@ -161,7 +174,7 @@ endif()
 
 # The release launcher "THPS 2X Recomp.exe" (docs/release_plan.md): the toolkit's launcher with THPS 2X's names and
 # icon - no game code. Built into the build folder (not the layout); tools/release.ps1 appends the payload to it.
-if(TARGET xbox_launcher)
+if(TARGET xbox_launcher AND NOT ANDROID)
     # setup_win32.c: the setup window in the NG2 launcher's look (maintainer 2026-11-05, taken over from Panzer
     # Dragoon Orta Recompiled) and the toolkit's progress UI (game_setup_ui.h) in the same look - its six functions
     # replace game_setup_ui.c's at link time. src/vk_check.c: the Vulkan 1.3 check with the apology box (THPS2X.exe
