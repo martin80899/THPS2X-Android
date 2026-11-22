@@ -11,6 +11,9 @@ import android.graphics.Typeface;
 import android.hardware.input.InputManager;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.util.SparseArray;
 import android.view.InputDevice;
 import android.view.MotionEvent;
@@ -20,6 +23,8 @@ import java.util.Locale;
 
 /**
  * The on-screen Xbox pad, drawn over the game, with the FPS badge and the settings gear. Its state goes
+ * to the native side on every change. Only what THPS 2X needs: the left stick, A B X Y, the L and R
+ * triggers and Start (Black, White, Back, the D-pad and the right stick are left off). State goes
  * to the native side on every change (src/platform/touch_android.c), which merges it on top of player 1's
  * port. While a physical game controller is connected only the FPS badge stays.
  */
@@ -30,6 +35,7 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
     static native void nativeSetFps(int mode);
     static native String nativeDataDir();
     static native float[] nativeFrameStats();
+    static native void nativeRumbleSetup(int padPercent);
 
     // Button bits: keep in step with touch_android.c
     static final int A = 1, B = 1 << 1, X = 1 << 2, Y = 1 << 3, BLACK = 1 << 4, WHITE = 1 << 5,
@@ -54,16 +60,9 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
         new Btn(B, "B", 0xFFD9443B, 0.94f, 0.64f, 0.075f),
         new Btn(X, "X", 0xFF3B7BD9, 0.78f, 0.64f, 0.075f),
         new Btn(Y, "Y", 0xFFE0B83A, 0.86f, 0.48f, 0.075f),
-        new Btn(WHITE, "W", 0xFFE8E8E8, 0.70f, 0.40f, 0.050f),
-        new Btn(BLACK, "Bk", 0xFF505050, 0.76f, 0.30f, 0.050f),
         new Btn(LT, "L", 0xFFB0B0B0, 0.07f, 0.16f, 0.080f),
         new Btn(RT, "R", 0xFFB0B0B0, 0.93f, 0.16f, 0.080f),
-        new Btn(BACK, "Back", 0xFF909090, 0.42f, 0.08f, 0.050f),
-        new Btn(START, "Start", 0xFF909090, 0.58f, 0.08f, 0.050f),
-        new Btn(UP, "▲", 0xFFA0A0A0, 0.29f, 0.62f, 0.050f),
-        new Btn(DOWN, "▼", 0xFFA0A0A0, 0.29f, 0.86f, 0.050f),
-        new Btn(LEFT, "◀", 0xFFA0A0A0, 0.245f, 0.74f, 0.050f),
-        new Btn(RIGHT, "▶", 0xFFA0A0A0, 0.335f, 0.74f, 0.050f),
+        new Btn(START, "Start", 0xFF909090, 0.60f, 0.08f, 0.055f),
     };
 
     // Left stick: centre (fractions) and travel radius (fraction of height)
@@ -98,6 +97,7 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
     private final RectF badge = new RectF();
     private final Runnable statsPoll = new Runnable() {
         @Override public void run() {
+            if (!rumbleReady) applyRumble();
             try {
                 int m = nativeGetFps();
                 float[] v = nativeFrameStats();
@@ -114,6 +114,50 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
     };
     private SettingsMenu menu;
 
+    // Rumble (SettingsMenu's Controls tab): the controller's, the phone's under touch controls, strength,
+    // and a short tick on each on-screen button press
+    boolean padRumble = true, phoneRumble = true, haptics = true;
+    float rumbleStrength = 1f;
+    private boolean rumbleReady;
+    private final Vibrator vibrator;
+    private int phoneAmp;
+    private static TouchControls self;
+
+    /** The game's motors for player 1 (touch_android.c, the game thread). */
+    static void onRumble(int low, int high) {
+        TouchControls t = self;
+        if (t != null) t.phoneRumble(Math.max(low, high));
+    }
+
+    private synchronized void phoneRumble(int speed) {
+        if (vibrator == null || !vibrator.hasVibrator()) return;
+        int amp = (!phoneRumble || padConnected || speed <= 0) ? 0
+            : Math.max(1, Math.min(255, Math.round(speed / 65535f * 255f * rumbleStrength)));
+        if (amp == phoneAmp) return;
+        phoneAmp = amp;
+        try {
+            if (amp == 0) vibrator.cancel();
+            else vibrator.vibrate(VibrationEffect.createOneShot(10000,
+                vibrator.hasAmplitudeControl() ? amp : VibrationEffect.DEFAULT_AMPLITUDE));
+        } catch (Exception ignored) { }
+    }
+
+    /** The strength and on / off to the native side (the controller's rumble); again after a change. */
+    void applyRumble() {
+        try {
+            nativeRumbleSetup(padRumble ? Math.round(rumbleStrength * 100) : 0);
+            rumbleReady = true;
+        } catch (Throwable ignored) { }
+        if (!phoneRumble) phoneRumble(0);
+    }
+
+    void stopRumble() { phoneRumble(0); }
+
+    private void tick() {
+        if (!haptics || vibrator == null) return;
+        try { vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK)); } catch (Exception ignored) { }
+    }
+
     public TouchControls(Context context) {
         super(context);
         ring.setStyle(Paint.Style.STROKE);
@@ -126,6 +170,13 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
         scale = prefs.getFloat("scale", 1f);
         opacity = prefs.getFloat("opacity", 1f);
         shown = prefs.getBoolean("shown", true);
+        padRumble = prefs.getBoolean("pad_rumble", true);
+        phoneRumble = prefs.getBoolean("phone_rumble", true);
+        haptics = prefs.getBoolean("haptics", true);
+        rumbleStrength = prefs.getFloat("rumble_strength", 1f);
+        VibratorManager vm = (VibratorManager) context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+        vibrator = vm != null ? vm.getDefaultVibrator() : null;
+        self = this;
         inputManager = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
         inputManager.registerInputDeviceListener(this, new Handler(Looper.getMainLooper()));
         updateVisibility();
@@ -216,7 +267,9 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
     }
 
     void save() {
-        prefs.edit().putFloat("scale", scale).putFloat("opacity", opacity).putBoolean("shown", shown).apply();
+        prefs.edit().putFloat("scale", scale).putFloat("opacity", opacity).putBoolean("shown", shown)
+            .putBoolean("pad_rumble", padRumble).putBoolean("phone_rumble", phoneRumble)
+            .putBoolean("haptics", haptics).putFloat("rumble_strength", rumbleStrength).apply();
     }
 
     void release() {
@@ -322,6 +375,7 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
         }
         int p = 0;
         for (int i = 0; i < pointerButtons.size(); i++) p |= pointerButtons.valueAt(i);
+        if ((p & ~pressed) != 0) tick();               // a button newly pressed
         pressed = p;
         send();
         invalidate();
@@ -352,6 +406,7 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
         for (int id : InputDevice.getDeviceIds()) if (isGamepad(InputDevice.getDevice(id))) pad = true;
         padConnected = pad;
         if (pad) {
+            phoneRumble(0);
             pressed = 0; lx = 0; ly = 0; stickPointer = -1; gearPointer = -1; pointerButtons.clear();
             sent = -1;
             try { nativeOff(); } catch (UnsatisfiedLinkError ignored) { }

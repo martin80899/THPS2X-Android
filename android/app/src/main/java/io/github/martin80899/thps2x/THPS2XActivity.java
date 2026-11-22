@@ -76,6 +76,12 @@ public class THPS2XActivity extends SDLActivity {
     }
 
     @Override
+    protected void onPause() {
+        if (touch != null) touch.stopRumble();       // no phone vibration left running in the background
+        super.onPause();
+    }
+
+    @Override
     public void onBackPressed() {
         if (touch != null) touch.toggleSettings();
     }

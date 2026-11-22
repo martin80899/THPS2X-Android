@@ -192,6 +192,37 @@ public class SettingsMenu extends Dialog {
             public void step(int dir) { touch.scale = 1f; touch.opacity = 1f; touch.shown = true; touch.save(); touch.relayout(); }
             public boolean changes() { return true; }
         });
+        controls.items.add(new Item() {
+            public String name() { return "Controller rumble"; }
+            public String desc() { return "Bluetooth and USB controllers that can vibrate"; }
+            public String value() { return touch.padRumble ? "ON" : "OFF"; }
+            public void step(int dir) { touch.padRumble = !touch.padRumble; touch.save(); touch.applyRumble(); }
+            public boolean changes() { return true; }
+        });
+        controls.items.add(new Item() {
+            public String name() { return "Phone vibration"; }
+            public String desc() { return "The phone rumbles with the game while you play on the touch controls"; }
+            public String value() { return touch.phoneRumble ? "ON" : "OFF"; }
+            public void step(int dir) { touch.phoneRumble = !touch.phoneRumble; touch.save(); touch.applyRumble(); }
+            public boolean changes() { return true; }
+        });
+        controls.items.add(new Item() {
+            public String name() { return "Rumble strength"; }
+            public String desc() { return "For the controller and the phone"; }
+            public String value() { return Math.round(touch.rumbleStrength * 100) + "%"; }
+            public void step(int dir) {
+                touch.rumbleStrength = Math.max(0.25f, Math.min(1f, Math.round(touch.rumbleStrength * 4 + dir) / 4f));
+                touch.save(); touch.applyRumble();
+            }
+            public boolean changes() { return true; }
+        });
+        controls.items.add(new Item() {
+            public String name() { return "Button haptics"; }
+            public String desc() { return "A light tap when you press an on-screen button"; }
+            public String value() { return touch.haptics ? "ON" : "OFF"; }
+            public void step(int dir) { touch.haptics = !touch.haptics; touch.save(); }
+            public boolean changes() { return true; }
+        });
         controls.items.add(info("Controller", () -> touch.padConnected ? "CONNECTED" : "NONE",
             "Open this menu with Back + Start together, or the phone's back"));
         tabs.add(controls);
@@ -529,6 +560,7 @@ public class SettingsMenu extends Dialog {
                 c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
             }
         }
+        touch.stopRumble();
         ui.post(refresh);
         if (touch.padConnected && list.getChildCount() > 0) list.getChildAt(0).requestFocus();
     }

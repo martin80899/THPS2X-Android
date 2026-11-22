@@ -1,5 +1,5 @@
 diff --git a/src/input/xinput_device.c b/src/input/xinput_device.c
-index 4179647..7465efd 100644
+index 4179647..d81f4bb 100644
 --- a/src/input/xinput_device.c
 +++ b/src/input/xinput_device.c
 @@ -287,6 +287,38 @@ static void keyboard_state(XBOX_INPUT_STATE *pState)
@@ -50,11 +50,54 @@ index 4179647..7465efd 100644
      xbox_InputScriptApply((int)dwPort, &pState->Gamepad);
      if (s_bind_suppress)   /* a press being recorded (rebinding menu) */
          memset(&pState->Gamepad, 0, sizeof pState->Gamepad);
+@@ -593,18 +627,28 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+     return rc;
+ }
+ 
++/* A port's own rumble (Android: the phone's vibrator under touch controls) and the controllers'
++ * strength in percent (0 = off), xinput_xbox.h */
++void (*volatile xbox_rumble_hook)(DWORD port, WORD low, WORD high);
++volatile int xbox_rumble_pad_percent = 100;
++
+ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+ {
+     DWORD rc = ERROR_DEVICE_NOT_CONNECTED;
++    void (*hook)(DWORD, WORD, WORD) = xbox_rumble_hook;
++    int pct = xbox_rumble_pad_percent;
+ 
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pVibration)
+         return rc;
++    if (hook)
++        hook(dwPort, pVibration->wLeftMotorSpeed, pVibration->wRightMotorSpeed);
++    pct = pct < 0 ? 0 : pct > 100 ? 100 : pct;
+     lock();
+     /* SDL rumble runs for a duration; the title sets the motors again when it
+      * changes them, so hold each setting until the next (or 10 s). */
+     if (g_pads[dwPort]) {
+-        SDL_RumbleGamepad(g_pads[dwPort], pVibration->wLeftMotorSpeed,
+-                          pVibration->wRightMotorSpeed, 10000);
++        SDL_RumbleGamepad(g_pads[dwPort], (Uint16)(pVibration->wLeftMotorSpeed * pct / 100),
++                          (Uint16)(pVibration->wRightMotorSpeed * pct / 100), 10000);
+         rc = ERROR_SUCCESS;
+     }
+     unlock();
 diff --git a/src/input/xinput_xbox.h b/src/input/xinput_xbox.h
-index 4767a3a..ad0fb73 100644
+index 4767a3a..8338f99 100644
 --- a/src/input/xinput_xbox.h
 +++ b/src/input/xinput_xbox.h
-@@ -168,6 +168,11 @@ void xbox_InputKeyEvent(int scancode, int down);
+@@ -118,6 +118,11 @@ int xbox_InputScriptKeyDown(int scancode);
+  */
+ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration);
+ 
++/* Rumble for a port to pass on itself (every call, before the controller's; Android: the phone's
++ * vibrator), and the controllers' strength in percent, 0 = no controller rumble. */
++extern void (*volatile xbox_rumble_hook)(DWORD port, WORD low, WORD high);
++extern volatile int xbox_rumble_pad_percent;
++
+ /**
+  * Check if a controller is connected.
+  */
+@@ -168,6 +173,11 @@ void xbox_InputKeyEvent(int scancode, int down);
  /* Release every key (the window lost the focus: no key-up will arrive). */
  void xbox_InputKeyReleaseAll(void);
  

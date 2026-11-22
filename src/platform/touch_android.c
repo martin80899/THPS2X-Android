@@ -6,6 +6,7 @@
  */
 #include <jni.h>
 #include <string.h>
+#include <SDL3/SDL_system.h>
 #include "xinput_xbox.h"
 #include "settings.h"
 #include "nv2a_vk.h"
@@ -152,4 +153,38 @@ Java_io_github_martin80899_thps2x_TouchControls_nativeFrameStats(JNIEnv *env, jc
     nv2a_vk_frame_stats(&v[0], &v[1]);
     if (a) (*env)->SetFloatArrayRegion(env, a, 0, 2, v);
     return a;
+}
+
+/* Rumble: the game's motor speeds for player 1 go to TouchControls.onRumble (the phone's vibrator, under
+ * touch controls) from the game thread - SDL's thread, attached to the VM; the class is the one Java
+ * handed over in nativeRumbleSetup, since FindClass on a native thread sees only the system classes. */
+static jclass s_tc_class;
+static jmethodID s_tc_rumble;
+static unsigned s_last_rumble = 0xFFFFFFFFu;
+
+static void rumble_hook(DWORD port, WORD low, WORD high)
+{
+    JNIEnv *env;
+    unsigned v = ((unsigned)low << 16) | high;
+    if (port != 0 || v == s_last_rumble || !s_tc_class || !s_tc_rumble)
+        return;
+    s_last_rumble = v;
+    env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    if (!env)
+        return;
+    (*env)->CallStaticVoidMethod(env, s_tc_class, s_tc_rumble, (jint)low, (jint)high);
+    if ((*env)->ExceptionCheck(env))
+        (*env)->ExceptionClear(env);
+}
+
+JNIEXPORT void JNICALL
+Java_io_github_martin80899_thps2x_TouchControls_nativeRumbleSetup(JNIEnv *env, jclass cls, jint pad_percent)
+{
+    if (!s_tc_class) {
+        s_tc_class = (jclass)(*env)->NewGlobalRef(env, cls);
+        s_tc_rumble = (*env)->GetStaticMethodID(env, cls, "onRumble", "(II)V");
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); s_tc_rumble = NULL; }
+        xbox_rumble_hook = rumble_hook;
+    }
+    xbox_rumble_pad_percent = pad_percent;
 }
