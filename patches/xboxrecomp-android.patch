@@ -4777,7 +4777,7 @@ index c1d5b44..05a76eb 100644
  
      off_t  off = ((off_t)offHigh << 32) | offLow;
 diff --git a/templates/runtime/recomp_types.h b/templates/runtime/recomp_types.h
-index f4db41b..993fc13 100644
+index f4db41b..717fd0b 100644
 --- a/templates/runtime/recomp_types.h
 +++ b/templates/runtime/recomp_types.h
 @@ -232,6 +232,15 @@ extern RECOMP_TLS uint32_t g_seh_ebp;
@@ -4796,8 +4796,27 @@ index f4db41b..993fc13 100644
  #if defined(_MSC_VER)
  #include <intrin.h>
  #define RECOMP_ATOMIC_ADD32(p, v)     ((uint32_t)_InterlockedExchangeAdd((volatile long *)(p), (long)(v)))
+@@ -356,6 +365,18 @@ static inline int64_t recomp_fist(double value, uint16_t control, unsigned bits)
+     return (int64_t)rounded;
+ }
+ 
++/* SSE CVT(T)SS2SI / CVT(T)SD2SI. x86 stores the integer indefinite 0x80000000 for a NaN or a value out of
++ * int32 range; a C cast is undefined there, and arm64 saturates instead (0x7FFFFFFF, NaN -> 0) -- a colour
++ * byte packed from such a value turned 0x00 into 0xFF on Android and lit up glow sprites in full blue or red.
++ * The non-truncating forms round as MXCSR says: to nearest even unless the title changed it (as the host's
++ * mode, which nearbyint follows). */
++static inline int32_t recomp_cvt_i32(double v, int truncate) {
++    double r = truncate ? trunc(v) : nearbyint(v);
++    if (!(r >= -2147483648.0 && r <= 2147483647.0))
++        return (int32_t)0x80000000u;
++    return (int32_t)r;
++}
++
+ /* ================================================================
+  * ICALL trace ring buffer (for debugging indirect calls)
+  * ================================================================ */
 diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
-index 8d818d9..9c12c17 100644
+index 8d818d9..7fc84a8 100644
 --- a/tools/recomp/lifter.py
 +++ b/tools/recomp/lifter.py
 @@ -1674,8 +1674,12 @@ class Lifter:
@@ -4815,3 +4834,22 @@ index 8d818d9..9c12c17 100644
  
          if m in ("stc", "clc", "cmc"):
              if not self.needs_cf:
+@@ -3365,14 +3369,16 @@ class Lifter:
+                 return [_sse_write(ops[0], f"(float)(int32_t){src}") + " /* cvtsi2ss */"]
+         if m in ("cvtss2si", "cvttss2si"):
+             if nops >= 2:
+-                return [_fmt_operand_write(ops[0], f"(int32_t){_sse_read(ops[1])}") + f" /* {m} */"]
++                t = 1 if m.startswith("cvtt") else 0
++                return [_fmt_operand_write(ops[0], f"recomp_cvt_i32({_sse_read(ops[1])}, {t})") + f" /* {m} */"]
+         if m == "cvtsi2sd":
+             if nops >= 2:
+                 src = _fmt_operand_read(ops[1])
+                 return [_sse_write(ops[0], f"(double)(int32_t){src}") + " /* cvtsi2sd */"]
+         if m in ("cvtsd2si", "cvttsd2si"):
+             if nops >= 2:
+-                return [_fmt_operand_write(ops[0], f"(int32_t){_sse_read(ops[1])}") + f" /* {m} */"]
++                t = 1 if m.startswith("cvtt") else 0
++                return [_fmt_operand_write(ops[0], f"recomp_cvt_i32({_sse_read(ops[1])}, {t})") + f" /* {m} */"]
+         if m == "cvtss2sd":
+             if nops >= 2:
+                 return [_sse_write(ops[0], f"(double){_sse_read(ops[1])}") + " /* cvtss2sd */"]
