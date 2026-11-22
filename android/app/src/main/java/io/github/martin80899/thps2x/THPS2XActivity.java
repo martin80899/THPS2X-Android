@@ -2,6 +2,8 @@ package io.github.martin80899.thps2x;
 
 import android.os.Bundle;
 import android.view.Display;
+import android.view.InputDevice;
+import android.view.KeyEvent;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 
@@ -34,13 +36,39 @@ public class THPS2XActivity extends SDLActivity {
         }
     }
 
+    private TouchControls touch;
+
+    /** The phone's back (gesture, navigation bar or key) opens the settings instead of leaving the game.
+     *  A game controller's own buttons still go to the game. */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        if (e.getKeyCode() == KeyEvent.KEYCODE_BACK && touch != null) {
+            InputDevice d = e.getDevice();
+            int src = e.getSource();
+            boolean pad = d != null && !d.isVirtual()
+                && ((src & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+                    || (src & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK);
+            if (!pad) {
+                if (e.getAction() == KeyEvent.ACTION_UP && !e.isCanceled()) touch.toggleSettings();
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(e);
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (touch != null) touch.toggleSettings();
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         requestFastestRefresh();
         if (mLayout != null) {   // SDL's layout holding the game's surface: the on-screen pad goes on top
-            mLayout.addView(new TouchControls(this), new ViewGroup.LayoutParams(
+            touch = new TouchControls(this);
+            mLayout.addView(touch, new ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
     }

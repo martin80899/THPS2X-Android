@@ -87,3 +87,61 @@ Java_io_github_martin80899_thps2x_TouchControls_nativeDataDir(JNIEnv *env, jclas
     (void)cls;
     return (*env)->NewStringUTF(env, host_android_data_dir());
 }
+
+/* The Android settings menu: the game's RECOMP OPTIONS lines (recomp_manual.c), read and stepped. */
+extern int thps_android_opt_count(void);
+extern const char *thps_android_opt_name(int i);
+extern int thps_android_opt_restart(int i);
+extern void thps_android_opt_value(int i, char *out, size_t n);
+extern void thps_android_opt_next(int i);
+
+JNIEXPORT jint JNICALL
+Java_io_github_martin80899_thps2x_TouchControls_nativeOptCount(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return thps_android_opt_count();
+}
+
+JNIEXPORT jstring JNICALL
+Java_io_github_martin80899_thps2x_TouchControls_nativeOptName(JNIEnv *env, jclass cls, jint i)
+{
+    (void)cls;
+    return (*env)->NewStringUTF(env, thps_android_opt_name(i));
+}
+
+JNIEXPORT jboolean JNICALL
+Java_io_github_martin80899_thps2x_TouchControls_nativeOptRestart(JNIEnv *env, jclass cls, jint i)
+{
+    (void)env; (void)cls;
+    return thps_android_opt_restart(i) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jstring JNICALL
+Java_io_github_martin80899_thps2x_TouchControls_nativeOptValue(JNIEnv *env, jclass cls, jint i)
+{
+    char v[96];
+    (void)cls;
+    thps_android_opt_value(i, v, sizeof v);
+    return (*env)->NewStringUTF(env, v);
+}
+
+JNIEXPORT void JNICALL
+Java_io_github_martin80899_thps2x_TouchControls_nativeOptNext(JNIEnv *env, jclass cls, jint i)
+{
+    (void)env; (void)cls;
+    thps_android_opt_next(i);
+}
+
+/* The FPS badge (TouchControls draws it): frames per second and the longest frame of the last half
+ * second, and whether the FPS COUNTER setting asks for it (0 off, 1 fps, 2 both, 3 frame time). */
+extern void nv2a_vk_frame_stats(float *fps, float *ms);
+JNIEXPORT jfloatArray JNICALL
+Java_io_github_martin80899_thps2x_TouchControls_nativeFrameStats(JNIEnv *env, jclass cls)
+{
+    float v[2] = { 0, 0 };
+    jfloatArray a = (*env)->NewFloatArray(env, 2);
+    (void)cls;
+    nv2a_vk_frame_stats(&v[0], &v[1]);
+    if (a) (*env)->SetFloatArrayRegion(env, a, 0, 2, v);
+    return a;
+}

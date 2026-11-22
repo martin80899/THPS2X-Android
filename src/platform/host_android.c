@@ -466,6 +466,10 @@ int host_init(int argc, char **argv, HostOptions *opt)
      * runs at a time here (toolkit kernel_bridge.c, the guest CPU lock). RECOMP_GUEST_LOCK=0 turns it off. */
     host_setenv_default("RECOMP_GUEST_LOCK", "1");
 
+    {
+        extern volatile int nv2a_vk_hud_external;  /* the FPS badge is TouchControls.java's */
+        nv2a_vk_hud_external = 1;
+    }
     RECOMP_ICALL_FEEDBACK_INIT();
     install_fault_handler();
     xbox_PageTrackEnable();

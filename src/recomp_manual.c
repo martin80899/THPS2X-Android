@@ -4080,8 +4080,92 @@ static void opt_lr(uint32_t screen, int dir, int pad)
  * antialiasing picked before;
  * (2) the windowed rectangle (nv2a_vk_window_rect) is saved once it has been
  * still for 60 swaps, as "x,y,w,h" in window_rect. */
+#if defined(__ANDROID__)
+/* ── The Android settings menu (back button / gear; TouchControls.java via touch_android.c) ───────────
+ * A few RECOMP OPTIONS lines, changed from the UI thread: a tap only counts a step here, and the game
+ * thread takes the steps at its next swap (thps_options_tick), through opt_val_step like the game's menu,
+ * so the value is saved and applied exactly as there. */
+static const short s_android_opts[] = { VAL_RENDER, VAL_UPSCALE, VAL_SHARP, VAL_STRETCH, VAL_ASPECT,
+                                        VAL_FRAMERATE, VAL_ANISO, VAL_BRIGHT, VAL_FOV };
+#define ANDROID_OPTS ((int)(sizeof s_android_opts / sizeof s_android_opts[0]))
+static int s_android_req[ANDROID_OPTS];
+
+int thps_android_opt_count(void) { return ANDROID_OPTS; }
+
+const char *thps_android_opt_name(int i)
+{
+    return i >= 0 && i < ANDROID_OPTS ? s_val[s_android_opts[i]].label : "";
+}
+
+/* 1 when the line applies only after the game is opened again */
+int thps_android_opt_restart(int i)
+{
+    return i >= 0 && i < ANDROID_OPTS && s_android_opts[i] == VAL_ASPECT;
+}
+
+/* The value texts, written by the game thread (android_opt_drain: settings are the game thread's) and
+ * copied out under s_android_lock, so the UI thread never reads the settings themselves. */
+static char s_android_txt[ANDROID_OPTS][64];
+static volatile int s_android_lock;
+
+static void android_lock(void)   { while (__atomic_test_and_set(&s_android_lock, __ATOMIC_ACQUIRE)) {} }
+static void android_unlock(void) { __atomic_clear(&s_android_lock, __ATOMIC_RELEASE); }
+
+void thps_android_opt_value(int i, char *out, size_t n)
+{
+    if (!n) return;
+    out[0] = 0;
+    if (i < 0 || i >= ANDROID_OPTS) return;
+    android_lock();
+    snprintf(out, n, "%s", s_android_txt[i][0] ? s_android_txt[i] : "...");
+    android_unlock();
+}
+
+void thps_android_opt_next(int i)
+{
+    if (i >= 0 && i < ANDROID_OPTS)
+        __atomic_add_fetch(&s_android_req[i], 1, __ATOMIC_SEQ_CST);
+}
+
+static int opt_val_step(int id, int dir);
+static void opt_val_text(int id, char *out, size_t n);
+static void android_opt_drain(void)
+{
+    static unsigned s_frames;
+    int i, any = 0;
+    for (i = 0; i < ANDROID_OPTS; i++) {
+        int n = __atomic_exchange_n(&s_android_req[i], 0, __ATOMIC_SEQ_CST), id = s_android_opts[i];
+        while (n-- > 0) {
+            if (id == VAL_RENDER) {
+                if (!opt_val_step(id, 1))                /* past the largest: back to the first */
+                    while (opt_val_step(id, -1)) {}
+            } else {
+                opt_val_step(id, 1);
+            }
+            any = 1;
+        }
+    }
+    if (any || s_frames++ % 30 == 0) {             /* the texts: after a change, else twice a second */
+        char t[ANDROID_OPTS][64];
+        for (i = 0; i < ANDROID_OPTS; i++) {
+            char line[128];
+            const char *c;
+            opt_val_text(s_android_opts[i], line, sizeof line);
+            c = strstr(line, ": ");                /* "LABEL: VALUE" -> "VALUE" */
+            snprintf(t[i], sizeof t[i], "%s", c ? c + 2 : line);
+        }
+        android_lock();
+        memcpy(s_android_txt, t, sizeof t);
+        android_unlock();
+    }
+}
+#endif
+
 void thps_options_tick(void)
 {
+#if defined(__ANDROID__)
+    android_opt_drain();
+#endif
     static unsigned seen, saved;
     static int still;
     int x, y, w, h;

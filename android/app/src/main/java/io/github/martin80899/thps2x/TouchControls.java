@@ -6,13 +6,17 @@ import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.Typeface;
 import android.hardware.input.InputManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.SparseArray;
 import android.view.InputDevice;
+import android.view.Gravity;
 import android.view.MotionEvent;
+import android.util.TypedValue;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -38,13 +42,20 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
     static native int nativeGetFps();
     static native void nativeSetFps(int mode);
     static native String nativeDataDir();
+    // The game's own settings (RECOMP OPTIONS lines, recomp_manual.c) and its frame statistics
+    static native int nativeOptCount();
+    static native String nativeOptName(int i);
+    static native String nativeOptValue(int i);
+    static native void nativeOptNext(int i);
+    static native float[] nativeFrameStats();
 
-    /** Graphics tests: env.txt lines in THPS2X/data, read when the game starts (host_android.c). */
+    /** Advanced tests: env.txt lines in THPS2X/data, read when the game starts (host_android.c). One
+     *  line per name; switching one on replaces any other line for the same name. */
     private static final String[][] TESTS = {
-        { "THPS2X_ONE_CORE=1", "Test: game on one CPU core" },
-        { "RECOMP_VK_INSTANCE=0", "Test: instancing off" },
-        { "RECOMP_VK_NO_DYN_VERTEX_INPUT=1", "Test: dynamic vertex input off" },
-        { "RECOMP_PAGE_TRACK=0", "Test: page tracking off" },
+        { "THPS2X_ONE_CORE=1", "Run the game on one CPU core" },
+        { "RECOMP_VK_INSTANCE=0", "Instancing off" },
+        { "RECOMP_VK_NO_DYN_VERTEX_INPUT=0", "Dynamic vertex input on (colour flashes on Adreno)" },
+        { "RECOMP_PAGE_TRACK=0", "Page tracking off" },
     };
     private static final String[] FPS_NAMES = { "OFF", "FPS", "FPS + FRAME TIME", "FRAME TIME" };
 
@@ -104,6 +115,32 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
     private boolean shown = true;
     private float gearX, gearY, gearR;
     private int gearPointer = -1;
+    private boolean padConnected;
+
+    // FPS badge (top left, in from the edge): the renderer's numbers, read twice a second
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private int fpsMode;
+    private float statFps, statMs;
+    private final Paint badgeBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint badgeText = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF badge = new RectF();
+    private final Runnable statsPoll = new Runnable() {
+        @Override public void run() {
+            try {
+                int m = nativeGetFps();
+                float[] v = nativeFrameStats();
+                float f = v != null ? v[0] : 0, ms = v != null ? v[1] : 0;
+                if (m != fpsMode || Math.round(f) != Math.round(statFps) || Math.abs(ms - statMs) > 0.05f) {
+                    fpsMode = m; statFps = f; statMs = ms;
+                    invalidate();
+                }
+            } catch (Throwable ignored) {
+                // the game library is not loaded yet
+            }
+            ui.postDelayed(this, 500);
+        }
+    };
+    private AlertDialog dialog;
 
     public TouchControls(Context context) {
         super(context);
@@ -118,7 +155,9 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
         shown = prefs.getBoolean("shown", true);
         inputManager = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
         inputManager.registerInputDeviceListener(this, new Handler(Looper.getMainLooper()));
+        badgeText.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD));
         updateVisibility();
+        ui.postDelayed(statsPoll, 1000);
     }
 
     @Override
@@ -149,20 +188,156 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
         text.setColor(Color.WHITE);
     }
 
+    /** The FPS badge: a dark rounded pill with a coloured dot (green smooth, amber, red slow). */
+    private void drawBadge(Canvas c) {
+        if (fpsMode == 0 || (statFps <= 0 && statMs <= 0)) return;
+        float h = getHeight(), w = getWidth();
+        float bh = 0.068f * h, x = 0.135f * w, y = 0.035f * h, r = bh / 2;
+        String big, small;
+        int col;
+        if (fpsMode == 3) {
+            big = String.format(java.util.Locale.US, "%.1f", statMs); small = "ms";
+            col = statMs <= 18f ? 0xFF4CD964 : statMs <= 36f ? 0xFFFFC23D : 0xFFFF5A5A;
+        } else {
+            big = String.valueOf(Math.round(statFps));
+            small = fpsMode == 2 ? String.format(java.util.Locale.US, "FPS  %.1f ms", statMs) : "FPS";
+            col = statFps >= 55f ? 0xFF4CD964 : statFps >= 28f ? 0xFFFFC23D : 0xFFFF5A5A;
+        }
+        badgeText.setTextSize(bh * 0.62f);
+        float bigW = badgeText.measureText(big);
+        badgeText.setTextSize(bh * 0.36f);
+        float smallW = badgeText.measureText(small);
+        float dotR = bh * 0.13f, padX = bh * 0.38f;
+        float width = padX + dotR * 2 + bh * 0.22f + bigW + bh * 0.14f + smallW + padX;
+        badge.set(x, y, x + width, y + bh);
+        badgeBg.setStyle(Paint.Style.FILL);
+        badgeBg.setColor(0xB8101418);
+        c.drawRoundRect(badge, r, r, badgeBg);
+        badgeBg.setStyle(Paint.Style.STROKE);
+        badgeBg.setStrokeWidth(Math.max(1.5f, bh * 0.035f));
+        badgeBg.setColor((col & 0x00FFFFFF) | 0x70000000);
+        c.drawRoundRect(badge, r, r, badgeBg);
+        badgeBg.setStyle(Paint.Style.FILL);
+        badgeBg.setColor(col);
+        float cx = x + padX + dotR;
+        c.drawCircle(cx, y + bh / 2, dotR, badgeBg);
+        float tx = cx + dotR + bh * 0.22f, base = y + bh * 0.72f;
+        badgeText.setTextAlign(Paint.Align.LEFT);
+        badgeText.setTextSize(bh * 0.62f);
+        badgeText.setColor(Color.WHITE);
+        c.drawText(big, tx, base, badgeText);
+        badgeText.setTextSize(bh * 0.36f);
+        badgeText.setColor(0xFFB8C0CC);
+        c.drawText(small, tx + bigW + bh * 0.14f, base, badgeText);
+    }
+
+    /** Opens the settings (the gear, or the phone's back button: THPS2XActivity). */
+    void toggleSettings() {
+        if (dialog != null && dialog.isShowing()) { dialog.dismiss(); return; }
+        openSettings();
+    }
+
+    private int dp(float v) {
+        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()));
+    }
+
+    /** "FIELD OF VIEW" -> "Field of view" (FSR stays FSR) */
+    private static String nice(String s) {
+        StringBuilder b = new StringBuilder();
+        for (String word : s.split(" ")) {
+            if (b.length() > 0) b.append(' ');
+            if (word.equals("FSR") || word.equals("FOV") || word.equals("HUD")) b.append(word);
+            else if (b.length() == 0) b.append(word.charAt(0)).append(word.substring(1).toLowerCase(java.util.Locale.US));
+            else b.append(word.toLowerCase(java.util.Locale.US));
+        }
+        return b.toString();
+    }
+
+    private TextView header(Context ctx, String t) {
+        TextView h = new TextView(ctx);
+        h.setText(t.toUpperCase(java.util.Locale.US));
+        h.setTextColor(0xFF5AC8FA);
+        h.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        h.setTypeface(Typeface.DEFAULT_BOLD);
+        h.setLetterSpacing(0.08f);
+        h.setPadding(0, dp(18), 0, dp(6));
+        return h;
+    }
+
+    /** A tappable line: name on the left, value as a chip on the right. */
+    private TextView row(Context ctx, LinearLayout box, String name, String value, View.OnClickListener click) {
+        LinearLayout r = new LinearLayout(ctx);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setPadding(dp(4), dp(10), dp(4), dp(10));
+        TypedValue tv = new TypedValue();
+        ctx.getTheme().resolveAttribute(android.R.attr.selectableItemBackground, tv, true);
+        r.setBackgroundResource(tv.resourceId);
+        TextView n = new TextView(ctx);
+        n.setText(name);
+        n.setTextColor(0xFFF2F4F8);
+        n.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        r.addView(n, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView v = new TextView(ctx);
+        v.setText(value);
+        v.setTextColor(0xFF0B1A24);
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        v.setTypeface(Typeface.DEFAULT_BOLD);
+        v.setPadding(dp(12), dp(5), dp(12), dp(5));
+        GradientDrawable chip = new GradientDrawable();
+        chip.setColor(0xFF5AC8FA);
+        chip.setCornerRadius(dp(14));
+        v.setBackground(chip);
+        r.addView(v);
+        r.setOnClickListener(click);
+        box.addView(r);
+        return v;
+    }
+
     private void openSettings() {
-        Context ctx = getContext();
+        final Context ctx = getContext();
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.VERTICAL);
-        int pad = Math.round(20 * getResources().getDisplayMetrics().density);
-        box.setPadding(pad, pad / 2, pad, 0);
+        int pad = dp(22);
+        box.setPadding(pad, 0, pad, dp(8));
 
+        // Graphics: the game's own options (saved and applied by the game, as in its RECOMP OPTIONS menu)
+        box.addView(header(ctx, "Graphics"));
+        int n = 0;
+        try { n = nativeOptCount(); } catch (Throwable ignored) { }
+        final TextView[] values = new TextView[n];
+        for (int i = 0; i < n; i++) {
+            final int k = i;
+            values[i] = row(ctx, box, nice(nativeOptName(i)), nativeOptValue(i), v -> {
+                try { nativeOptNext(k); } catch (Throwable ignored) { }
+            });
+        }
+        final int[] fpsMode = { 0 };
+        try { fpsMode[0] = nativeGetFps() & 3; } catch (Throwable ignored) { }
+        final TextView[] fpsValue = new TextView[1];
+        fpsValue[0] = row(ctx, box, "FPS counter", FPS_NAMES[fpsMode[0]], v -> {
+            fpsMode[0] = (fpsMode[0] + 1) & 3;
+            fpsValue[0].setText(FPS_NAMES[fpsMode[0]]);
+            try { nativeSetFps(fpsMode[0]); } catch (Throwable ignored) { }
+            ui.removeCallbacks(statsPoll); ui.post(statsPoll);
+        });
+        if (n == 0) {
+            TextView t = new TextView(ctx);
+            t.setText("The game is still starting - open this again in a moment.");
+            box.addView(t);
+        }
+
+        // Touch controls
+        box.addView(header(ctx, "Touch controls"));
         Switch show = new Switch(ctx);
         show.setText("Show touch controls");
+        show.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         show.setChecked(shown);
         show.setOnCheckedChangeListener((v, on) -> { shown = on; save(); if (!on) release(); invalidate(); });
         box.addView(show);
 
         final TextView sizeLabel = new TextView(ctx);
+        sizeLabel.setPadding(0, dp(10), 0, 0);
         box.addView(sizeLabel);
         SeekBar size = new SeekBar(ctx);
         size.setMax(90);                                   // 60% .. 150%
@@ -179,6 +354,7 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
         box.addView(size);
 
         final TextView opLabel = new TextView(ctx);
+        opLabel.setPadding(0, dp(6), 0, 0);
         box.addView(opLabel);
         SeekBar op = new SeekBar(ctx);
         op.setMax(80);                                     // 20% .. 100%
@@ -192,32 +368,25 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
             @Override public void onStopTrackingTouch(SeekBar sb) { save(); }
         });
         box.addView(op);
-
-        // FPS counter: the game's own setting, at once
-        final Button fps = new Button(ctx);
-        fps.setAllCaps(false);
-        final int[] fpsMode = { 0 };
-        try { fpsMode[0] = nativeGetFps(); } catch (Throwable ignored) { }
-        fps.setText("FPS counter: " + FPS_NAMES[fpsMode[0] & 3]);
-        fps.setOnClickListener(v -> {
-            fpsMode[0] = (fpsMode[0] + 1) & 3;
-            fps.setText("FPS counter: " + FPS_NAMES[fpsMode[0]]);
-            try { nativeSetFps(fpsMode[0]); } catch (Throwable ignored) { }
+        row(ctx, box, "Reset touch controls", "RESET", v -> {
+            scale = 1f; opacity = 1f; shown = true; save(); layout(getWidth(), getHeight()); invalidate();
+            show.setChecked(true); size.setProgress(40); op.setProgress(80);
         });
-        box.addView(fps);
 
-        // Graphics tests: env.txt switches, after the game is opened again
-        TextView tests = new TextView(ctx);
-        tests.setText("\nGraphics tests (close the game and open it again to apply):");
-        box.addView(tests);
+        // Advanced tests: env.txt switches, after the game is opened again
+        box.addView(header(ctx, "Advanced tests (close and reopen the game)"));
         final File env = envFile();
         final List<String> on = readEnv(env);
         for (String[] t : TESTS) {
             Switch sw = new Switch(ctx);
             sw.setText(t[1]);
+            sw.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+            sw.setPadding(0, dp(4), 0, dp(4));
             sw.setChecked(on.contains(t[0]));
+            final String key = t[0].substring(0, t[0].indexOf('=') + 1);
             sw.setOnCheckedChangeListener((v, c) -> {
-                if (c) { if (!on.contains(t[0])) on.add(t[0]); } else on.remove(t[0]);
+                on.removeIf(l -> l.startsWith(key));
+                if (c) on.add(t[0]);
                 writeEnv(env, on);
             });
             box.addView(sw);
@@ -225,18 +394,40 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
 
         ScrollView scroll = new ScrollView(ctx);
         scroll.addView(box);
-        new AlertDialog.Builder(ctx, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("Touch controls")
+        dialog = new AlertDialog.Builder(ctx, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("THPS 2X Settings")
             .setView(scroll)
-            .setPositiveButton("Done", null)
-            .setNegativeButton("Close game", (d, w) -> {
+            .setPositiveButton("Resume", null)
+            .setNegativeButton("Quit game", (d, w) -> {
                 if (getContext() instanceof android.app.Activity) ((android.app.Activity) getContext()).finishAffinity();
                 System.exit(0);
             })
-            .setNeutralButton("Reset", (d, w) -> {
-                scale = 1f; opacity = 1f; shown = true; save(); layout(getWidth(), getHeight()); invalidate();
-            })
-            .show();
+            .create();
+
+        // The values follow the game: a tap is taken at its next frame, so read them again shortly
+        final Runnable refresh = new Runnable() {
+            @Override public void run() {
+                if (dialog == null || !dialog.isShowing()) return;
+                for (int i = 0; i < values.length; i++) {
+                    try {
+                        String v = nativeOptValue(i);
+                        if (!v.contentEquals(values[i].getText())) values[i].setText(v);
+                    } catch (Throwable ignored) { }
+                }
+                ui.postDelayed(this, 150);
+            }
+        };
+        dialog.setOnShowListener(d -> ui.post(refresh));
+        dialog.setOnDismissListener(d -> ui.removeCallbacks(refresh));
+        dialog.show();
+        if (dialog.getWindow() != null) {
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(0xF2181C24);
+            bg.setCornerRadius(dp(18));
+            dialog.getWindow().setBackgroundDrawable(bg);
+            int w = getResources().getDisplayMetrics().widthPixels, h = getResources().getDisplayMetrics().heightPixels;
+            dialog.getWindow().setLayout(Math.min(Math.max(w, h) / 2, dp(560)), Math.round(Math.min(w, h) * 0.92f));
+        }
     }
 
     private static File envFile() {
@@ -277,8 +468,9 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
 
     @Override
     protected void onDraw(Canvas c) {
+        drawBadge(c);
         drawGear(c);
-        if (!shown) return;
+        if (!shown || padConnected) return;
         // stick base and knob
         fill.setColor(withAlpha(0xFFFFFF, 0x40));
         c.drawCircle(stickCx, stickCy, stickR, fill);
@@ -332,7 +524,7 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
                     gearPointer = id;
                     return true;
                 }
-                if (!shown) return true;
+                if (!shown || padConnected) return true;
                 if (stickPointer < 0 && inStick(x, y)) {
                     stickPointer = id;
                     moveStick(x, y);
@@ -397,7 +589,8 @@ public class TouchControls extends View implements InputManager.InputDeviceListe
     private void updateVisibility() {
         boolean pad = false;
         for (int id : InputDevice.getDeviceIds()) if (isGamepad(InputDevice.getDevice(id))) pad = true;
-        setVisibility(pad ? GONE : VISIBLE);
+        padConnected = pad;                 // with a controller: only the badge and the gear stay
+        invalidate();
         if (pad) {
             pressed = 0; lx = 0; ly = 0; stickPointer = -1; pointerButtons.clear();
             sent = -1;

@@ -143,10 +143,52 @@ index dafc4f3..87eca22 100644
  
  # Slang shaders (shader_pass.c): librashader's C header only, vendored in
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index 9c57fc8..8561cd9 100644
+index 9c57fc8..a762430 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
-@@ -3458,7 +3458,16 @@ static int create_swapchain(void)
+@@ -1653,6 +1653,16 @@ static int hud_on(void)
+     return hud_mode() != NV2A_VK_HUD_OFF;
+ }
+ 
++/* The latest frame statistics (hud_tick), for a HUD the port draws itself (Android's FPS badge). With
++ * nv2a_vk_hud_external set, the renderer counts but draws nothing. */
++volatile int nv2a_vk_hud_external;
++static volatile float s_stat_fps, s_stat_ms;
++void nv2a_vk_frame_stats(float *fps, float *ms)
++{
++    if (fps) *fps = s_stat_fps;
++    if (ms) *ms = s_stat_ms;
++}
++
+ void nv2a_vk_set_fps_hud(int mode)
+ {
+     s_hud_opt = mode >= NV2A_VK_HUD_OFF && mode <= NV2A_VK_HUD_MS ? mode : NV2A_VK_HUD_OFF;
+@@ -1674,6 +1684,8 @@ static void hud_tick(void)
+     if (now - s_hud_t0 >= 500000000ull && s_hud_n) {
+         double fps = (double)s_hud_n * 1e9 / (double)(now - s_hud_t0);
+         double ms = (double)s_hud_max / 1e6;
++        s_stat_fps = (float)fps;
++        s_stat_ms = (float)ms;
+         snprintf(s_hud_txt[0], sizeof s_hud_txt[0], "%u", (unsigned)(fps + 0.5));
+         snprintf(s_hud_txt[1], sizeof s_hud_txt[1], "%.1f", ms > 999.0 ? 999.0 : ms);
+         s_hud_t0 = now;
+@@ -1705,7 +1717,15 @@ static void hud_rect(VkImageBlit *bl, int x, int y, int w, int h)
+ }
+ 
+ /* dst is in TRANSFER_DST_OPTIMAL and was just written by transfers. */
++static void hud_draw_own(VkImage dst);
+ static void hud_draw(VkImage dst)
++{
++    if (nv2a_vk_hud_external)
++        return;                                    /* the port draws the counter (nv2a_vk_frame_stats) */
++    hud_draw_own(dst);
++}
++
++static void hud_draw_own(VkImage dst)
+ {
+     VkImageBlit bl[128];
+     VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+@@ -3458,7 +3478,16 @@ static int create_swapchain(void)
      ci.imageExtent = s_sc_extent;
      ci.imageArrayLayers = 1;
      ci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -163,7 +205,7 @@ index 9c57fc8..8561cd9 100644
      ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
      ci.presentMode = mode;
      ci.clipped = VK_TRUE;
-@@ -3781,7 +3790,13 @@ static int ready(void)
+@@ -3781,7 +3810,13 @@ static int ready(void)
                          did = SDL_GetPrimaryDisplay();
                      dm = did ? SDL_GetDesktopDisplayMode(did) : NULL;
                      if (dm && dm->w > 0 && dm->h > 0)
@@ -177,7 +219,21 @@ index 9c57fc8..8561cd9 100644
                  }
                  aspect = (float)xbox_video_aspect();   /* 4:3, 16:9, 16:10, 21:9 (2026-11-07) */
                  int ww = (int)(wh * aspect + 0.5f);
-@@ -6295,6 +6310,323 @@ static int present_fxaa(VkSurf *s, VkImage dst, VkImageView dview, VkFormat fmt,
+@@ -3868,7 +3903,13 @@ static int ready(void)
+     {
+         const char *e = getenv("RECOMP_VK_NO_DYN_VERTEX_INPUT");
+         int dyn = vk_dyn_vertex_input(s_pd);
++#if defined(__ANDROID__)
++        /* Adreno drivers drew stray, stretched triangles with the dynamic vertex input state (THPS 2X: walls
++         * and ramps flashing blue or red; gone with it baked). Baked unless RECOMP_VK_NO_DYN_VERTEX_INPUT=0. */
++        s_baked_vi = !dyn || !(e && *e == '0');
++#else
+         s_baked_vi = !dyn || (e && *e == '1');
++#endif
+         if (s_baked_vi)
+             fprintf(stderr, "  [VK] vertex input baked into the pipelines (%s)\n",
+                     dyn ? "RECOMP_VK_NO_DYN_VERTEX_INPUT=1" : "no " VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
+@@ -6295,6 +6336,323 @@ static int present_fxaa(VkSurf *s, VkImage dst, VkImageView dview, VkFormat fmt,
      return 1;
  }
  
@@ -501,7 +557,7 @@ index 9c57fc8..8561cd9 100644
  /* RECOMP_GL_DUMP while headless: the FXAA'd frame too, at the surface's
   * size (<prefix>NNNNN_fxaa.bmp), to check the pass without a window. */
  static void dump_fxaa(VkSurf *s, const char *path)
-@@ -7503,11 +7835,15 @@ static void vk_flip(void)
+@@ -7503,11 +7861,15 @@ static void vk_flip(void)
                  scale = ww / lw < wh / lh ? ww / lw : wh / lh;
                  dw = (int)(lw * scale); dh = (int)(lh * scale);
                  dx = ((int)ww - dw) / 2; dy = ((int)wh - dh) / 2;
@@ -517,11 +573,19 @@ index 9c57fc8..8561cd9 100644
                      || (fxaa_on()
                          && present_fxaa(pres, dst, s_sc_views[idx], s_sc_format, s_sc_extent, dx, dy, dw, dh,
                                          VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+@@ -7621,6 +7983,7 @@ static void vk_flip(void)
+         s_hud_n = 0;
+         s_hud_max = 0;
+         s_hud_txt[0][0] = 0;
++        s_stat_fps = s_stat_ms = 0.0f;
+     }
+     {
+         int counted = xbox_ft_frame();
 diff --git a/src/nv2a_vk/nv2a_vk.h b/src/nv2a_vk/nv2a_vk.h
-index 881d39a..60c30f1 100644
+index 881d39a..f82a566 100644
 --- a/src/nv2a_vk/nv2a_vk.h
 +++ b/src/nv2a_vk/nv2a_vk.h
-@@ -96,6 +96,11 @@ void nv2a_vk_set_gamma_ramp(const uint8_t r[256], const uint8_t g[256], const ui
+@@ -96,6 +96,15 @@ void nv2a_vk_set_gamma_ramp(const uint8_t r[256], const uint8_t g[256], const ui
   * turns FXAA off. */
  enum { NV2A_VK_AA_OFF, NV2A_VK_AA_FXAA, NV2A_VK_AA_SMAA, NV2A_VK_AA_MSAA2, NV2A_VK_AA_MSAA4 };
  void nv2a_vk_set_antialiasing(int mode);
@@ -530,6 +594,10 @@ index 881d39a..60c30f1 100644
 +void nv2a_vk_set_upscale(int mode);
 +void nv2a_vk_set_sharpness(int level);
 +void nv2a_vk_set_stretch(int on);
++/* A port that draws its own frame counter: the renderer's statistics (fps, longest frame in ms over the
++ * last half second, 0 while FPS COUNTER is off) and the switch that stops the renderer's own drawing. */
++void nv2a_vk_frame_stats(float *fps, float *ms);
++extern volatile int nv2a_vk_hud_external;
  /* 0 once an MSAA count failed to allocate this run or the device lacks it --
   * the renderer went back to the count that last worked; the port's menu then
   * takes its setting back too. 1 for every other mode, and before the first
@@ -4853,3 +4921,11 @@ index 8d818d9..7fc84a8 100644
          if m == "cvtss2sd":
              if nops >= 2:
                  return [_sse_write(ops[0], f"(double){_sse_read(ops[1])}") + " /* cvtss2sd */"]
+diff --git a/xboxrecomp b/xboxrecomp
+new file mode 120000
+index 0000000..05cfcaf
+--- /dev/null
++++ b/xboxrecomp
+@@ -0,0 +1 @@
++/home/claude/xboxrecomp
+\ No newline at end of file
