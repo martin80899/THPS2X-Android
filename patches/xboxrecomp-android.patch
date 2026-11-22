@@ -66,6 +66,27 @@ index 4767a3a..ad0fb73 100644
  /* Replace the keymap (copied; at most XBOX_KEYMAP_MAX entries). Several keys
   * may drive one control. Without a call the toolkit default is used:
   * arrows d-pad, Z X A S = A B X Y, Q E white/black, 1 3 triggers,
+diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
+index 9c57fc8..dae26ef 100644
+--- a/src/nv2a_vk/nv2a_vk.c
++++ b/src/nv2a_vk/nv2a_vk.c
+@@ -3458,7 +3458,16 @@ static int create_swapchain(void)
+     ci.imageExtent = s_sc_extent;
+     ci.imageArrayLayers = 1;
+     ci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
++#if defined(__ANDROID__)
++    /* Android reports the panel's rotation as currentTransform (ROTATE_90 on a portrait-native phone held
++     * landscape). Handing that back claims the image is already rotated, and the game showed sideways.
++     * IDENTITY: the image is drawn the way the window stands, the compositor turns it -- also when the
++     * phone is flipped to the other landscape side. */
++    ci.preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
++                      ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : caps.currentTransform;
++#else
+     ci.preTransform = caps.currentTransform;
++#endif
+     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+     ci.presentMode = mode;
+     ci.clipped = VK_TRUE;
 diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
 index c1d5b44..05a76eb 100644
 --- a/src/platform/win32_compat.c
