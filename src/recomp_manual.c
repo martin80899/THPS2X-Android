@@ -2867,6 +2867,11 @@ static uint32_t s_bind_cursor;
  * start, main.c turns them into its env defaults: ASPECT RATIO, VSYNC (OFF =
  * the unblocked present modes, RECOMP_VSYNC=0). BOOT ANIMATION: media\boot.mpg,
  * ON / OFF in its sub-list (see "BOOT ANIMATION" above). */
+#if defined(__ANDROID__)
+#define THPS_MENUS_DEFAULT "on"      /* Android: menus fill the phone screen too (stretched) */
+#else
+#define THPS_MENUS_DEFAULT "off"
+#endif
 enum { VAL_DISPMODE, VAL_RENDER, VAL_ASPECT, VAL_MENUS, VAL_ANISO, VAL_FRAMERATE, VAL_PACING, VAL_VSYNC, VAL_COUNTER,
        VAL_FOV, VAL_HUD, VAL_BRIGHT,                              /* v1.2.2: HUD AT 16:9 (#10), BRIGHTNESS (#11) */
        VAL_TIPS, VAL_SCORE, VAL_CHAT, VAL_BLUR,
@@ -3129,15 +3134,22 @@ static const OptVal s_val[VAL_COUNT] = {
     [VAL_RENDER]    = { "RENDER RESOLUTION", NULL, NULL, { NULL }, { NULL }, 0 },   /* opt_render_* */
     /* 16:10 and 21:9 (maintainer, 2026-11-07; GitHub #9 / #10); the order is
      * thps_aspect_index's */
+#if defined(__ANDROID__)
+    /* Android: the "21:9" choice takes the phone panel's exact ratio (toolkit xbox_video_aspect_fit, 1.90..2.60
+     * there) - FULL SCREEN, the default: the whole screen, real widescreen, nothing stretched */
+    [VAL_ASPECT]    = { "ASPECT RATIO", "aspect_ratio", "21:9", { "4:3", "16:9", "16:10", "21:9" },
+                        { "4:3", "16:9", "16:10", "FULL SCREEN" }, 4 },
+#else
     [VAL_ASPECT]    = { "ASPECT RATIO", "aspect_ratio", "4:3", { "4:3", "16:9", "16:10", "21:9" },
                         { "4:3", "16:9", "16:10", "21:9" }, 4 },
+#endif
     /* FIELD OF VIEW (maintainer, 2026-11-07): extra degrees, at once (thps_fov_extra) */
     [VAL_FOV]       = { "FIELD OF VIEW", "fov", "0", { "0", "5", "10", "15", "20", "25", "30" },
                         { "ORIGINAL", "+5", "+10", "+15", "+20", "+25", "+30" }, 7 },
     /* "menus stretched" (aspect-ratio rule, maintainer 2026-10-25): with 16:9
      * on, the 4:3 menu screens pillarboxed or stretched; movies always stay
      * pillarboxed (maintainer, 2026-10-26); gameplay is real 16:9 either way */
-    [VAL_MENUS]     = { "MENUS AT 16:9", "menus_stretched", "off", { "off", "on" },
+    [VAL_MENUS]     = { "MENUS AT 16:9", "menus_stretched", THPS_MENUS_DEFAULT, { "off", "on" },
                         { "PILLARBOXED", "STRETCHED" }, 2 },
     /* GitHub #10 (maintainer, 2026-11-12): the widescreen HUD correction
      * (v1.2.0, nv2a_vk_set_hud_squash) can be switched off - STRETCHED = the
@@ -3323,7 +3335,7 @@ static int opt_hud_mode(void)
 
 static int opt_stretch_on(void)
 {
-    return !strcmp(settings_get("menus_stretched", "off"), "on");
+    return !strcmp(settings_get("menus_stretched", THPS_MENUS_DEFAULT), "on");
 }
 
 /* HUD AT 16:9 = STRETCHED (GitHub #10): the HUD without the v1.2.0

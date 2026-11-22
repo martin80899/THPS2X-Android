@@ -248,7 +248,11 @@ int main(int argc, char **argv)
     settings_init(opt.save_dir);
     {
         /* 16:9 = "1" as before; 16:10 and 21:9 by name (maintainer, 2026-11-07) */
+#if defined(__ANDROID__)
+        const char *ar = settings_get("aspect_ratio", "21:9");   /* the phone's whole screen (FULL SCREEN) */
+#else
         const char *ar = settings_get("aspect_ratio", "4:3");
+#endif
         if (!strcmp(ar, "16:9"))
             host_setenv_default("THPS_WIDESCREEN", "1");
         else if (!strcmp(ar, "16:10") || !strcmp(ar, "21:9"))
