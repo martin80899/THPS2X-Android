@@ -1,0 +1,248 @@
+diff --git a/src/kernel/kernel_file.c b/src/kernel/kernel_file.c
+index 7839cf9..304a84f 100644
+--- a/src/kernel/kernel_file.c
++++ b/src/kernel/kernel_file.c
+@@ -1051,11 +1051,15 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+ /* ======================================================================== */
+ #else /* !_WIN32 */
+ 
++static void posix_dir_context_drop(HANDLE handle);
++
+ void xbox_file_close_host(void *host_handle)
+ {
+-    /* ponytail: no atomic save writes on POSIX yet (see the Win32 side). */
+-    if (host_handle)
+-        CloseHandle((HANDLE)host_handle);
++    if (host_handle) {
++        HANDLE handle = (HANDLE)host_handle;
++        posix_dir_context_drop(handle);
++        CloseHandle(handle);
++    }
+ }
+ /* ====================  POSIX backend  =================================== */
+ /* ======================================================================== */
+@@ -1117,6 +1121,29 @@ static NTSTATUS errno_to_status(int e)
+     }
+ }
+ 
++static BOOL posix_translate_obj_path(PXBOX_OBJECT_ATTRIBUTES attributes,
++                                    char *path, DWORD size)
++{
++    const char *name = get_xbox_path(attributes);
++    if (!name)
++        return FALSE;
++    if (attributes->RootDirectory && name[0] != '\\' && !(name[0] && name[1] == ':')) {
++        const char *dir = w32_handle_path(attributes->RootDirectory);
++        int n;
++        char *p;
++        if (!dir)
++            return FALSE;
++        n = snprintf(path, size, "%s/%s", dir, name);
++        if (n < 0 || (DWORD)n >= size)
++            return FALSE;
++        for (p = path + strlen(dir) + 1; *p; p++)
++            if (*p == '\\') *p = '/';
++        xbox_host_path_fix_case(path, strlen(dir));
++        return TRUE;
++    }
++    return xbox_translate_path(name, path, size);
++}
++
+ NTSTATUS __stdcall xbox_NtCreateFile(
+     PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
+     PXBOX_OBJECT_ATTRIBUTES ObjectAttributes, PXBOX_IO_STATUS_BLOCK IoStatusBlock,
+@@ -1129,8 +1156,7 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+     if (!FileHandle || !ObjectAttributes)
+         return STATUS_INVALID_PARAMETER;
+ 
+-    const char* xbox_path = get_xbox_path(ObjectAttributes);
+-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, XBOX_HOST_PATH)) {
++    if (!posix_translate_obj_path(ObjectAttributes, host_path, XBOX_HOST_PATH)) {
+         xbox_log(XBOX_LOG_ERROR, XBOX_LOG_FILE, "NtCreateFile: path translation failed");
+         return STATUS_OBJECT_PATH_NOT_FOUND;
+     }
+@@ -1229,11 +1255,20 @@ NTSTATUS __stdcall xbox_NtWriteFile(
+         return STATUS_INVALID_HANDLE;
+     }
+ 
+-    if (ByteOffset && ByteOffset->QuadPart >= 0)
+-        lseek(fd, (off_t)ByteOffset->QuadPart, SEEK_SET);
++    ssize_t n = -1;
++    if (!ByteOffset || ByteOffset->QuadPart < 0
++        || lseek(fd, (off_t)ByteOffset->QuadPart, SEEK_SET) >= 0) {
++        do {
++            n = write(fd, Buffer, Length);
++        } while (n < 0 && errno == EINTR);
++    }
+ 
+-    ssize_t n = write(fd, Buffer, Length);
+-    if (n < 0) {
++    const char *path = w32_handle_path(FileHandle);
++    int save = xbox_path_in_save_dir(path);
++    if (n < 0 || (save && ((ULONG)n != Length || fsync(fd) != 0))) {
++        if (save)
++            fprintf(stderr, "[STORAGE] Write failed for %s (%zd/%u bytes): %s\n",
++                    path, n, Length, n >= 0 && (ULONG)n != Length ? "short write" : strerror(errno));
+         XBOX_TRACE(XBOX_LOG_FILE, "NtWriteFile(handle=%p) errno=%d", FileHandle, errno);
+         IoStatusBlock->Status = STATUS_UNSUCCESSFUL;
+         IoStatusBlock->Information = 0;
+@@ -1250,7 +1285,7 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
+ {
+     XBOX_TRACE(XBOX_LOG_FILE, "NtClose(handle=%p)", Handle);
+     if (Handle && Handle != INVALID_HANDLE_VALUE) {
+-        CloseHandle(Handle);
++        xbox_file_close_host(Handle);
+         return STATUS_SUCCESS;
+     }
+     return STATUS_INVALID_HANDLE;
+@@ -1259,8 +1294,7 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
+ NTSTATUS __stdcall xbox_NtDeleteFile(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes)
+ {
+     char host_path[XBOX_HOST_PATH];
+-    const char* xbox_path = get_xbox_path(ObjectAttributes);
+-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, XBOX_HOST_PATH))
++    if (!posix_translate_obj_path(ObjectAttributes, host_path, XBOX_HOST_PATH))
+         return STATUS_OBJECT_PATH_NOT_FOUND;
+     XBOX_TRACE(XBOX_LOG_FILE, "NtDeleteFile: %s", host_path);
+     if (unlink(host_path) == 0) return STATUS_SUCCESS;
+@@ -1434,12 +1468,13 @@ NTSTATUS __stdcall xbox_NtQueryVolumeInformationFile(
+ NTSTATUS __stdcall xbox_NtFlushBuffersFile(HANDLE FileHandle, PXBOX_IO_STATUS_BLOCK IoStatusBlock)
+ {
+     int fd = w32_handle_fd(FileHandle);
+-    if (fd >= 0) fsync(fd);
++    NTSTATUS status = fd < 0 ? STATUS_INVALID_HANDLE
++                    : fsync(fd) == 0 ? STATUS_SUCCESS : errno_to_status(errno);
+     if (IoStatusBlock) {
+-        IoStatusBlock->Status = STATUS_SUCCESS;
++        IoStatusBlock->Status = status;
+         IoStatusBlock->Information = 0;
+     }
+-    return STATUS_SUCCESS;
++    return status;
+ }
+ 
+ NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(
+@@ -1451,8 +1486,7 @@ NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(
+ 
+     if (!FileInformation)
+         return STATUS_INVALID_PARAMETER;
+-    const char* xbox_path = get_xbox_path(ObjectAttributes);
+-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, XBOX_HOST_PATH))
++    if (!posix_translate_obj_path(ObjectAttributes, host_path, XBOX_HOST_PATH))
+         return STATUS_OBJECT_PATH_NOT_FOUND;
+     if (stat(host_path, &st) != 0)
+         return STATUS_OBJECT_NAME_NOT_FOUND;
+@@ -1472,12 +1506,27 @@ NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(
+ typedef struct {
+     HANDLE handle;
+     DIR*   dir;
++    int    exhausted;
+     char   pattern[64];
+ } DIR_CONTEXT;
+ 
+ static DIR_CONTEXT s_dir_contexts[MAX_DIR_CONTEXTS];
+-static CRITICAL_SECTION s_dir_cs;
+-static BOOL s_dir_cs_init = FALSE;
++static SRWLOCK s_posix_dir_lock = SRWLOCK_INIT;
++
++static void posix_dir_context_drop(HANDLE handle)
++{
++    AcquireSRWLockExclusive(&s_posix_dir_lock);
++    for (int i = 0; i < MAX_DIR_CONTEXTS; i++) {
++        DIR_CONTEXT *ctx = &s_dir_contexts[i];
++        if (ctx->handle == handle) {
++            if (ctx->dir)
++                closedir(ctx->dir);
++            memset(ctx, 0, sizeof(*ctx));
++            break;
++        }
++    }
++    ReleaseSRWLockExclusive(&s_posix_dir_lock);
++}
+ 
+ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+     HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext,
+@@ -1494,8 +1543,11 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+         return STATUS_INVALID_INFO_CLASS;
+     }
+ 
+-    if (!s_dir_cs_init) { InitializeCriticalSection(&s_dir_cs); s_dir_cs_init = TRUE; }
+-    EnterCriticalSection(&s_dir_cs);
++    if (!w32_handle_path(FileHandle)) {
++        IoStatusBlock->Status = STATUS_INVALID_HANDLE;
++        return STATUS_INVALID_HANDLE;
++    }
++    AcquireSRWLockExclusive(&s_posix_dir_lock);
+ 
+     /* Locate or create the per-handle enumeration context. */
+     DIR_CONTEXT* ctx = NULL;
+@@ -1504,18 +1556,24 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+     if (!ctx) {
+         for (int i = 0; i < MAX_DIR_CONTEXTS; i++)
+             if (s_dir_contexts[i].handle == NULL) { ctx = &s_dir_contexts[i]; break; }
+-        if (!ctx) { LeaveCriticalSection(&s_dir_cs); return STATUS_INSUFFICIENT_RESOURCES; }
++        if (!ctx) { ReleaseSRWLockExclusive(&s_posix_dir_lock); return STATUS_INSUFFICIENT_RESOURCES; }
+         ctx->handle = FileHandle;
+         ctx->dir = NULL;
+     }
+ 
++    if (ctx->exhausted && !RestartScan) {
++        ReleaseSRWLockExclusive(&s_posix_dir_lock);
++        IoStatusBlock->Status = STATUS_NO_MORE_FILES;
++        return STATUS_NO_MORE_FILES;
++    }
+     if (RestartScan || ctx->dir == NULL) {
++        ctx->exhausted = 0;
+         if (ctx->dir) { closedir(ctx->dir); ctx->dir = NULL; }
+         const char* dpath = w32_handle_path(FileHandle);
+-        if (!dpath) { LeaveCriticalSection(&s_dir_cs); return STATUS_UNSUCCESSFUL; }
++        if (!dpath) { ReleaseSRWLockExclusive(&s_posix_dir_lock); return STATUS_UNSUCCESSFUL; }
+         ctx->dir = opendir(dpath);
+         if (!ctx->dir) {
+-            LeaveCriticalSection(&s_dir_cs);
++            ReleaseSRWLockExclusive(&s_posix_dir_lock);
+             IoStatusBlock->Status = STATUS_NO_MORE_FILES;
+             return STATUS_NO_MORE_FILES;
+         }
+@@ -1524,6 +1582,8 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+             if (n >= sizeof(ctx->pattern)) n = sizeof(ctx->pattern) - 1;
+             memcpy(ctx->pattern, FileName->Buffer, n);
+             ctx->pattern[n] = '\0';
++            if (!strcmp(ctx->pattern, "*.*"))
++                strcpy(ctx->pattern, "*");
+         } else {
+             strcpy(ctx->pattern, "*");
+         }
+@@ -1538,8 +1598,8 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+         if (!de) {
+             closedir(ctx->dir);
+             ctx->dir = NULL;
+-            ctx->handle = NULL;
+-            LeaveCriticalSection(&s_dir_cs);
++            ctx->exhausted = 1;
++            ReleaseSRWLockExclusive(&s_posix_dir_lock);
+             IoStatusBlock->Status = STATUS_NO_MORE_FILES;
+             return STATUS_NO_MORE_FILES;
+         }
+@@ -1549,12 +1609,10 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+             break;
+     }
+ 
+-    char full[MAX_PATH];
++    char full[XBOX_HOST_PATH];
+     snprintf(full, sizeof(full), "%s/%s", dpath ? dpath : ".", de->d_name);
+     if (stat(full, &st) != 0)
+         memset(&st, 0, sizeof(st));
+-    LeaveCriticalSection(&s_dir_cs);
+-
+     PXBOX_FILE_DIRECTORY_INFORMATION entry = (PXBOX_FILE_DIRECTORY_INFORMATION)FileInformation;
+     memset(entry, 0, Length);
+ 
+@@ -1573,6 +1631,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+     ULONG header_size = (ULONG)((ULONG_PTR)&((PXBOX_FILE_DIRECTORY_INFORMATION)0)->FileName);
+     if (name_len > 0 && (header_size + (ULONG)name_len) <= Length)
+         memcpy(entry->FileName, de->d_name, name_len);
++    ReleaseSRWLockExclusive(&s_posix_dir_lock);
+     IoStatusBlock->Status = STATUS_SUCCESS;
+     IoStatusBlock->Information = header_size + name_len;
+     return STATUS_SUCCESS;

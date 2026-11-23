@@ -21,9 +21,11 @@ PRIV="$REPO/../private"
 BUILD="$PRIV/build/thps2x-android"
 DEPS="${ANDROID_DEPS:?ANDROID_DEPS: install prefix of SDL3 + glslang built for Android arm64}"
 
-if ! git -C "$TOOLKIT" apply --reverse --check "$REPO/patches/xboxrecomp-android.patch" 2>/dev/null; then
-    git -C "$TOOLKIT" apply "$REPO/patches/xboxrecomp-android.patch"
-fi
+for patch in xboxrecomp-android.patch xboxrecomp-android-saves.patch; do
+    if ! git -C "$TOOLKIT" apply --reverse --check "$REPO/patches/$patch" 2>/dev/null; then
+        git -C "$TOOLKIT" apply "$REPO/patches/$patch"
+    fi
+done
 
 "$REPO/tools/lift.sh" "$IN" "$TOOLKIT" "$PRIV/thps2x"
 

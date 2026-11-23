@@ -45,6 +45,10 @@ The layout above is used when the app has "All files access", including existing
 With a fresh install that uses the picker without that permission, the same layout is kept in
 app-specific storage.
 
+After a run, use **Save Career → Xbox Hard Disk** and wait for the success message.
+Cheat toggles are restored when you return to the main menu after launch. For cheats
+that change Career progress, use the game's save menu to keep those changes.
+
 ## Building your own APK
 
 Run the build on a Linux PC or in WSL on Windows. Use Python 3 with `capstone`, CMake,
@@ -52,14 +56,16 @@ Ninja, and the Android NDK. Use the same checkout for the shell and the native g
 
 1. **Shell APK** (SDL3 Java + `libSDL3.so` + `libc++_shared.so`, no game code): GitHub Actions
    workflow `android-shell` (`.github/workflows/android.yml`), artifact `thps2x-android-shell`.
-   The workflow can be run on a fork with Actions enabled. It builds the shell entirely
-   from source and needs no ISO. Use the downloaded shell APK as input to step 2.
+   Download the latest [shell APK](https://github.com/martin80899/THPS2X-Android/raw/refs/heads/shell-apk/thps2x-android-shell.apk)
+   for the source revision on `main`. The workflow can also be run on a fork with Actions enabled.
+   It builds the shell from source. Use the downloaded shell APK as input to step 2.
 2. **Game library and APK**. Check out [xboxrecomp-vulkan](https://github.com/almost-drowned-rat/xboxrecomp-vulkan)
    in `../xboxrecomp` or set `XBOXRECOMP_DIR` to its location. Keep your ISO on your computer:
 
 ```sh
 export ANDROID_NDK=/path/to/ndk          # r27 or later
 export ANDROID_DEPS=/path/to/prefix      # SDL3 3.4.18 + glslang 16.6.0 built for android-arm64, installed here
+export CMAKE_EXTRA="-DSDL3_DIR=$ANDROID_DEPS/lib/cmake/SDL3 -Dglslang_DIR=$ANDROID_DEPS/lib/cmake/glslang"
 tools/android_build.sh "/path/to/THPS 2X (USA).iso" /path/to/thps2x-android-shell.apk THPS2X.apk
 ```
 
