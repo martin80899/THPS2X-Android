@@ -361,6 +361,8 @@ names what took the time (shader compiles, textures, file reads, sleeps). Please
 
 ## Building from source
 
+See [Build THPS 2X for Android](docs/android.md) to build a personal APK from your own USA Xbox disc.
+
 The release exe is built from this repository and the toolkit
 [xboxrecomp-vulkan](https://github.com/almost-drowned-rat/xboxrecomp-vulkan) (branch `vulkan-backend` state); Windows 10/11 x64.
 Folder layout (`tools\paths.ps1`; every path **without spaces**, the compiler and Ninja use them directly):

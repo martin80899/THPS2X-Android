@@ -107,6 +107,22 @@ static int thps_game_setup(const char *game_dir)
         o.cancelled = xr_setup_ui_cancelled;
     }
     rc = xr_game_setup(&o, &r);
+#ifdef __ANDROID__
+    if (rc == XR_SETUP_NO_GAME && !quiet) {
+        char picked_image[HOST_PATH_MAX];
+        int picked = host_android_pick_disc(picked_image, sizeof picked_image);
+        if (picked <= 0) {
+            if (picked < 0)
+                xr_setup_ui_message(ui, 1, "Could not import the disc image. Make sure the ISO is readable "
+                                           "and there is enough free space, then reopen THPS 2X.");
+            xr_setup_ui_close(ui);
+            return 0;
+        }
+        o.image_path = picked_image;
+        rc = xr_game_setup(&o, &r);
+        host_android_discard_disc(picked_image);
+    }
+#endif
     printf("[SETUP] %s: %s\n", xr_game_setup_code_name(rc), r.message);
     if (rc != XR_SETUP_READY && rc != XR_SETUP_INSTALLED) {
         if (!quiet)

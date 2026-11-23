@@ -24,6 +24,12 @@ typedef struct HostOptions {
  * the crash handler and arm the time limit. Returns 0 on success. */
 int host_init(int argc, char **argv, HostOptions *opt);
 
+#ifdef __ANDROID__
+/* Pick and stage a disc image. Returns 1 on success, 0 on cancel, -1 on error. */
+int host_android_pick_disc(char *path, size_t path_size);
+void host_android_discard_disc(const char *path);
+#endif
+
 /* Read a whole file; caller frees with free(). NULL on failure. */
 void *host_read_file(const char *path, size_t *out_size);
 

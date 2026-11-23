@@ -10,8 +10,8 @@
  *   /storage/emulated/0/THPS2X/media   boot.mpg, soundtracks, shader packs (optional)
  *   /storage/emulated/0/THPS2X/saves   U: and settings.ini
  *   /storage/emulated/0/THPS2X/data    thps2x.log, caches, partition images
- * Shared storage needs "All files access" (MANAGE_EXTERNAL_STORAGE) on Android 11 and later;
- * the first start asks for it. THPS2X_ROOT overrides the folder (tests).
+ * With All files access, use the shared layout above. Otherwise use app-specific storage.
+ * THPS2X_ROOT overrides the folder (tests).
  *
  * Faults: one SIGSEGV/SIGBUS handler stands in for the vectored exception handler.
  * Page tracking (toolkit page_track.c) arms guest pages read-only and expects the
@@ -92,92 +92,69 @@ static int dir_writable(const char *dir)
     return 1;
 }
 
-/* ── All files access (Android 11+) through JNI ────────────────── */
+/* ── Android storage and file picker ──────────────────────────── */
 
-static int jni_sdk_int(JNIEnv *env)
-{
-    jclass ver = (*env)->FindClass(env, "android/os/Build$VERSION");
-    jfieldID f;
-    int v = 0;
-    if (!ver) { (*env)->ExceptionClear(env); return 0; }
-    f = (*env)->GetStaticFieldID(env, ver, "SDK_INT", "I");
-    if (f) v = (*env)->GetStaticIntField(env, ver, f);
-    (*env)->ExceptionClear(env);
-    (*env)->DeleteLocalRef(env, ver);
-    return v;
-}
-
-static int jni_is_storage_manager(JNIEnv *env)
-{
-    jclass envc;
-    jmethodID m;
-    int r = 0;
-    if (jni_sdk_int(env) < 30) return 1;   /* before Android 11 the manifest's storage permission covers it */
-    envc = (*env)->FindClass(env, "android/os/Environment");
-    if (!envc) { (*env)->ExceptionClear(env); return 0; }
-    m = (*env)->GetStaticMethodID(env, envc, "isExternalStorageManager", "()Z");
-    if (m) r = (*env)->CallStaticBooleanMethod(env, envc, m) ? 1 : 0;
-    (*env)->ExceptionClear(env);
-    (*env)->DeleteLocalRef(env, envc);
-    return r;
-}
-
-/* Opens the system page "All files access" for this app. */
-static void jni_open_storage_setting(JNIEnv *env, jobject activity)
-{
-    jclass actc = (*env)->GetObjectClass(env, activity);
-    jmethodID getpkg = (*env)->GetMethodID(env, actc, "getPackageName", "()Ljava/lang/String;");
-    jstring pkg = getpkg ? (jstring)(*env)->CallObjectMethod(env, activity, getpkg) : NULL;
-    const char *p = pkg ? (*env)->GetStringUTFChars(env, pkg, NULL) : NULL;
-    char uri[300];
-    jclass uric = (*env)->FindClass(env, "android/net/Uri");
-    jclass intc = (*env)->FindClass(env, "android/content/Intent");
-    jmethodID parse, ctor, start;
-    jobject u, in;
-    jstring juri, jact;
-
-    snprintf(uri, sizeof uri, "package:%s", p ? p : "");
-    if (p) (*env)->ReleaseStringUTFChars(env, pkg, p);
-    if (!uric || !intc) { (*env)->ExceptionClear(env); return; }
-    parse = (*env)->GetStaticMethodID(env, uric, "parse", "(Ljava/lang/String;)Landroid/net/Uri;");
-    ctor = (*env)->GetMethodID(env, intc, "<init>", "(Ljava/lang/String;Landroid/net/Uri;)V");
-    start = (*env)->GetMethodID(env, actc, "startActivity", "(Landroid/content/Intent;)V");
-    juri = (*env)->NewStringUTF(env, uri);
-    jact = (*env)->NewStringUTF(env, "android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION");
-    u = (*env)->CallStaticObjectMethod(env, uric, parse, juri);
-    in = (*env)->NewObject(env, intc, ctor, jact, u);
-    if (in) (*env)->CallVoidMethod(env, activity, start, in);
-    if ((*env)->ExceptionCheck(env)) {
-        /* some phones have no per-app page: the general list */
-        jobject in2;
-        jmethodID ctor1 = (*env)->GetMethodID(env, intc, "<init>", "(Ljava/lang/String;)V");
-        jstring a2 = (*env)->NewStringUTF(env, "android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION");
-        (*env)->ExceptionClear(env);
-        in2 = (*env)->NewObject(env, intc, ctor1, a2);
-        if (in2) (*env)->CallVoidMethod(env, activity, start, in2);
-        (*env)->ExceptionClear(env);
-    }
-}
-
-/* 1 when shared storage can be used, asking for the permission once if needed. */
-static int ensure_storage_access(void)
+static int has_shared_storage_access(void)
 {
     JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
-    jobject activity = (jobject)SDL_GetAndroidActivity();
-    int i, ok;
-    if (!env || !activity) return 0;
-    if (jni_is_storage_manager(env)) { (*env)->DeleteLocalRef(env, activity); return 1; }
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "THPS 2X",
-        "THPS 2X reads your game from the THPS2X folder on your phone's storage.\n\n"
-        "On the next screen, turn on \"Allow access to manage all files\" for THPS 2X, then come back.", NULL);
-    jni_open_storage_setting(env, activity);
-    ok = 0;
-    for (i = 0; i < 600 && !ok; i++) {       /* up to 5 minutes */
-        SDL_Delay(500);
-        ok = jni_is_storage_manager(env);
+    jclass environment;
+    jmethodID method;
+    int allowed = 0;
+    if (!env) return 0;
+    environment = (*env)->FindClass(env, "android/os/Environment");
+    if (environment) {
+        method = (*env)->GetStaticMethodID(env, environment, "isExternalStorageManager", "()Z");
+        if (method) allowed = (*env)->CallStaticBooleanMethod(env, environment, method);
+        (*env)->DeleteLocalRef(env, environment);
     }
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 0;
+    }
+    return allowed;
+}
+
+int host_android_pick_disc(char *path, size_t path_size)
+{
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jobject activity;
+    jclass activity_class;
+    jmethodID method;
+    jstring result = NULL;
+    const char *value;
+    int status = -1;
+
+    if (!env) return -1;
+    activity = (jobject)SDL_GetAndroidActivity();
+    if (!activity) return -1;
+    activity_class = (*env)->GetObjectClass(env, activity);
+    method = (*env)->GetMethodID(env, activity_class, "pickGameImage", "()Ljava/lang/String;");
+    if (method)
+        result = (jstring)(*env)->CallObjectMethod(env, activity, method);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    } else if (!result) {
+        status = 0;
+    } else if ((value = (*env)->GetStringUTFChars(env, result, NULL)) != NULL) {
+        if (strlen(value) < path_size) {
+            strcpy(path, value);
+            status = 1;
+        } else {
+            unlink(value);
+        }
+        (*env)->ReleaseStringUTFChars(env, result, value);
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (result) (*env)->DeleteLocalRef(env, result);
+    (*env)->DeleteLocalRef(env, activity_class);
     (*env)->DeleteLocalRef(env, activity);
-    return ok;
+    return status;
+}
+
+void host_android_discard_disc(const char *path)
+{
+    if (unlink(path) != 0 && errno != ENOENT)
+        fprintf(stderr, "[SETUP] cannot remove temporary disc image: %s\n", strerror(errno));
 }
 
 /* ── log: stdout/stderr into data/thps2x.log, and logcat ───────── */
@@ -339,9 +316,10 @@ int host_init(int argc, char **argv, HostOptions *opt)
         snprintf(root, sizeof root, "%s", root_env);
     } else {
         snprintf(root, sizeof root, "/storage/emulated/0/THPS2X");
-        if (!ensure_storage_access() || !dir_writable(root)) {
+        if (!has_shared_storage_access() || !dir_writable(root)) {
             /* no All files access: the app's own folder (Android/data/<package>/files) */
             const char *own = SDL_GetAndroidExternalStoragePath();
+            if (!own || !*own) own = SDL_GetAndroidInternalStoragePath();
             if (own && *own) snprintf(root, sizeof root, "%s", own);
         }
     }
