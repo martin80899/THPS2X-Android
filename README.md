@@ -310,7 +310,7 @@ delete the `bind.` lines from `saves\settings.ini`.
 ## Portability
 
 - Written in portable C with SDL3 and Vulkan only; platform code is kept in one thin layer.
-- Linux and Android are planned but **paused** for now. The code is kept ready for them.
+- See [Android](#android) for the current ARM64 build and requirements.
 
 ### Linux via Proton / Wine: best effort
 The Windows build runs under Proton and Wine too (from v0.9.1.1: the first start uses no Windows system tools any
@@ -360,7 +360,6 @@ names what took the time (shader compiles, textures, file reads, sleeps). Please
 
 - **v1.0.0:** the game with all extras listed above, including the classic career and the free camera.
 - **v1.1.0:** SCORE CALCULATION THPS 1, PHYSICS ORIGINAL THPS 2 PS1, frame pacing on 120 / 180 / 240 Hz displays.
-- **maybe Later:** Linux and Android.
 
 ### Non-goals
 - Online play.

@@ -57,7 +57,7 @@ Ninja, and the Android NDK. Use the same checkout for the shell and the native g
 1. **Shell APK** (SDL3 Java + `libSDL3.so` + `libc++_shared.so`, no game code): GitHub Actions
    workflow `android-shell` (`.github/workflows/android.yml`), artifact `thps2x-android-shell`.
    Download the latest [shell APK](https://github.com/martin80899/THPS2X-Android/raw/refs/heads/shell-apk/thps2x-android-shell.apk)
-   for the source revision on `main`. The workflow can also be run on a fork with Actions enabled.
+   that matches the version in the project README. The workflow can also be run on a fork with Actions enabled.
    It builds the shell from source. Use the downloaded shell APK as input to step 2.
 2. **Game library and APK**. Check out [xboxrecomp-vulkan](https://github.com/almost-drowned-rat/xboxrecomp-vulkan)
    in `../xboxrecomp` or set `XBOXRECOMP_DIR` to its location. Keep your ISO on your computer:
