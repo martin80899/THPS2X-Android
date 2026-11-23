@@ -9,6 +9,7 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 IN="${1:?usage: tools/lift.sh <default.xbe | disc.iso> [toolkit] [out]}"
+IN="$(cd "$(dirname "$IN")" && pwd)/$(basename "$IN")"
 TOOLKIT="$(cd "${2:-$REPO/../xboxrecomp}" && pwd)"
 OUT="${3:-$REPO/../private/thps2x}"
 XBE_SHA1="469818e015aed2730641c0bdcbd2557d8a6b8bb4"   # THPS 2X (USA), docs/xbe.md
@@ -23,7 +24,7 @@ case "$IN" in
     echo "== extract disc -> $OUT/game"
     (cd "$TOOLKIT" && "$PY" -m tools.xiso unpack "$IN" -o "$OUT/game")
     XBE="$OUT/game/default.xbe" ;;
-  *) XBE="$(cd "$(dirname "$IN")" && pwd)/$(basename "$IN")" ;;
+  *) XBE="$IN" ;;
 esac
 SHA="$(sha1sum "$XBE" | cut -d' ' -f1)"
 [ "$SHA" = "$XBE_SHA1" ] || echo "WARNING: unknown default.xbe version (SHA1 $SHA), continuing"

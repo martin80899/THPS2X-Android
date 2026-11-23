@@ -14,6 +14,14 @@ remapping and a full settings menu inside the game.
 
 ---
 
+## Android
+
+**Current version: 0.1.1.** This build adds a first-launch ISO picker, remembers cheat toggles, and fixes issues in the Career save file handling.
+
+[Build THPS 2X for Android](docs/android.md) using your own original Xbox THPS 2X (USA) disc. The public download is the source and build shell. Each player builds their personal APK on a computer, then selects the ISO once on their phone.
+
+---
+
 ## Highlights: play it like the originals
 
 - **Classic career** – THPS 1 levels first, then THPS 2, then 2X, each part with its own rules (see *Classic
@@ -360,6 +368,8 @@ names what took the time (shader compiles, textures, file reads, sleeps). Please
 ---
 
 ## Building from source
+
+See [Build THPS 2X for Android](docs/android.md) to build a personal APK from your own USA Xbox disc.
 
 The release exe is built from this repository and the toolkit
 [xboxrecomp-vulkan](https://github.com/almost-drowned-rat/xboxrecomp-vulkan) (branch `vulkan-backend` state); Windows 10/11 x64.

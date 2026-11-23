@@ -2300,6 +2300,61 @@ static int cheat_enter(int i)
     return res;
 }
 
+#if defined(__ANDROID__)
+static void cheat_save_toggles(void)
+{
+    char enabled[CHEAT_COUNT * 20 + 1];  /* checker accepts up to 18 letters per code */
+    size_t used = 0;
+    int i;
+    for (i = 0; i < CHEAT_COUNT; i++) {
+        size_t n;
+        if (!cheat_on(i))
+            continue;
+        if (used)
+            enabled[used++] = ',';
+        n = strlen(s_cheats[i].code);
+        memcpy(enabled + used, s_cheats[i].code, n);
+        used += n;
+    }
+    enabled[used] = 0;
+    settings_set("android_cheats", enabled);
+}
+
+static int cheat_was_enabled(const char *enabled, const char *code)
+{
+    size_t n = strlen(code);
+    const char *p = enabled;
+    do {
+        if (!strncmp(p, code, n) && (p[n] == 0 || p[n] == ','))
+            return 1;
+        p = strchr(p, ',');
+    } while (p && *++p);
+    return 0;
+}
+
+/* Restore on the main menu's first update, when its own cheat checker is ready. */
+extern void sub_00121530_gen(void);
+void sub_00121530(void)
+{
+    static int restored;
+    if (!restored && !GUEST8(0x003068C9u)) {
+        const char *enabled = settings_get("android_cheats", NULL);
+        uint32_t eax = g_eax, ecx = g_ecx, edx = g_edx;
+        int i;
+        restored = 1;
+        for (i = 0; enabled && i < CHEAT_COUNT; i++) {
+            if (s_cheats[i].va && cheat_on(i) != cheat_was_enabled(enabled, s_cheats[i].code)
+                && cheat_enter(i) != 1)
+                fprintf(stderr, "[CHEAT] could not restore %s\n", s_cheats[i].code);
+        }
+        g_eax = eax;
+        g_ecx = ecx;
+        g_edx = edx;
+    }
+    sub_00121530_gen();
+}
+#endif
+
 /* THPS_CHEAT_PROBE=1 (test, a throw-away layout): every code entered once,
  * each byte of the game's data 0x00270000 .. 0x00320000 it changed logged */
 static void cheat_probe(void)
@@ -2624,6 +2679,10 @@ static uint32_t cheat_action(uint32_t line)
             s_cheat_done[i] = 1;
         else if (r != 1)
             s_cheat_refused = (int8_t)i;
+#if defined(__ANDROID__)
+        else
+            cheat_save_toggles();
+#endif
     }
     cheat_build();
     return line;
@@ -4290,6 +4349,8 @@ static void android_take(int i, int dir)
             s_cheat_done[it.id] = 1;
         else if (r != 1)
             s_android_refused = (int8_t)it.id;
+        else
+            cheat_save_toggles();
         fprintf(stderr, "  options: cheat %s -> %d\n", s_cheats[it.id].code, r);
         break;
     }
@@ -4496,6 +4557,10 @@ void sub_001E66E0(void)
         if (line < CHEAT_FIRST || line >= (uint32_t)(CHEAT_FIRST + cheat_on_page()))
             return;
         changed = cheat_on(i) && cheat_enter(i) == 1;
+#if defined(__ANDROID__)
+        if (changed)
+            cheat_save_toggles();
+#endif
         s_cheat_refused = -1;
         cheat_build();
     } else

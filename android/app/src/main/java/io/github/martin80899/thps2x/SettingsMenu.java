@@ -136,7 +136,7 @@ public class SettingsMenu extends Dialog {
             { "Display", "Screen shape, brightness and on-screen info" },
             { "Camera", "Field of view and the free camera" },
             { "Gameplay", "The PC port's gameplay options" },
-            { "Cheats", "The game's button cheats, one tap each. Use them from the main menus, not in a level" },
+            { "Cheats", "Use cheats from the main menus. Toggles are remembered. Save Career to keep changes to your progress." },
         };
         for (String[] m : meta) tabs.add(new Tab(m[0], m[1]));
         int n = 0;
